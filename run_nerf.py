@@ -15,6 +15,7 @@ import pickle
 
 import matplotlib.pyplot as plt
 
+from temporal_hash_nerf import TemporalHashDnerf
 from run_nerf_helpers import *
 from optimizer import MultiOptimizer
 from radam import RAdam
@@ -97,7 +98,7 @@ def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
     return all_ret
 
 
-def render(H, W, K, timestep=0.,chunk=1024*32, rays=None, c2w=None, ndc=True,near=0., far=1., use_viewdirs=False, c2w_staticcam=None, **kwargs):
+def render(H, W, K, timestep,chunk=1024*32, rays=None, c2w=None, ndc=True,near=0., far=1., use_viewdirs=False, c2w_staticcam=None, **kwargs):
     """Render rays
     Args:
       H: int. Height of image in pixels.
@@ -163,7 +164,7 @@ def render(H, W, K, timestep=0.,chunk=1024*32, rays=None, c2w=None, ndc=True,nea
     return ret_list + [ret_dict]
 
 
-def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0):
+def render_path(render_poses, hwf, K, timestep, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0):
 
     H, W, focal = hwf
     near, far = render_kwargs['near'], render_kwargs['far']
@@ -180,10 +181,17 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
     accs = []
 
     t = time.time()
-    for i, c2w in enumerate(tqdm(render_poses)):
+    # for i, c2w in enumerate(tqdm(render_poses)):
+    for i, c2w in enumerate(render_poses):
+        if (i==0 or i==1): continue
         # print(i, time.time() - t)
         t = time.time()
-        rgb, depth, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+        rgb, depth, acc, _ = render(
+            H, W, K, 
+            timestep, 
+            chunk=chunk, 
+            c2w=c2w[:3,:4], 
+            **render_kwargs)
         rgbs.append(rgb.cpu().numpy())
         # normalize depth to [0,1]
         depth = (depth - near) / (far - near)
@@ -217,7 +225,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
             plt.savefig(filename, bbox_inches='tight', pad_inches=0)
             plt.close(fig)
             # imageio.imwrite(filename, rgb8)
-    
+        break # TODO REMOVE ME!!!!!!!
     rgbs = np.array(rgbs)
     depths = np.array(depths)
     psnrs = np.array(psnrs)
@@ -252,6 +260,18 @@ def create_nerf(args):
         embedding_params = list(embed_fn.parameters())
 
     
+    # For encoding D-Nerf temporal features second time
+    # Hash 
+    # encoding_lambda_call = lambda x: embed_fn(x)[0]; 
+    # emb_dim=input_ch
+    # Cos/Sin
+    emb, emb_dim = get_embedder(10, 1, i=0, input_dim=3)
+    encoding_lambda_call = lambda x: emb(x)
+    # She ->(N,16)
+    # emb, emb_dim = get_embedder(None, None, i=2)
+    # encoding_lambda_call = lambda x: emb(x)
+    
+
 
     input_ch_views = 0
     embeddirs_fn = None
@@ -264,23 +284,18 @@ def create_nerf(args):
 
     
     if args.i_embed==1:
-        model = DirectTemporalNeRFSmall(
-            n_layers=2,
-            hidden_dim=64,
-            geo_feat_dim=15,
-            n_layers_color=3,
-            hidden_dim_color=64,
-            input_dim=input_ch, 
+        model = TemporalHashDnerf(
+            input_dim_points=input_ch, 
             input_dim_views=input_ch_views,
-            input_dim_time=input_ch_time)
+            input_dim_time=input_ch_time,
+            encoding_lambda_call=encoding_lambda_call, 
+            encoding_lambda_dim=emb_dim)
         model.to(device)
 
-        # model = NeRFSmall(num_layers=2,
-        #                 hidden_dim=64,
-        #                 geo_feat_dim=15,
-        #                 num_layers_color=3,
-        #                 hidden_dim_color=64,
-        #                 input_ch=input_ch, input_ch_views=input_ch_views).to(device)
+        # D=args.netdepth, W=args.netwidth,
+        # input_ch=input_ch, output_ch=output_ch, skips=skips,
+        # input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs
+
     else:
         model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
@@ -292,15 +307,12 @@ def create_nerf(args):
 
     if args.N_importance > 0:
         if args.i_embed==1:
-            model_fine = DirectTemporalNeRFSmall(
-                n_layers=2,
-                hidden_dim=64,
-                geo_feat_dim=15,
-                n_layers_color=3,
-                hidden_dim_color=64,
-                input_dim=input_ch, 
+            model_fine = TemporalHashDnerf(
+                input_dim_points=input_ch, 
                 input_dim_views=input_ch_views,
-                input_dim_time=input_ch_time)
+                input_dim_time=input_ch_time,
+                encoding_lambda_call=encoding_lambda_call, 
+                encoding_lambda_dim=emb_dim)
             model_fine.to(device)
         else:
             model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
@@ -858,23 +870,25 @@ def train():
     # Short circuit if only rendering out from trained model
     if args.render_only:
         print('RENDER ONLY')
-        with torch.no_grad():
-            if args.render_test:
-                # render_test switches to test poses
-                images = images[i_test]
-            else:
-                # Default is smoother render_poses path
-                images = None
+        raise NotImplementedError
+        exit()
+        # with torch.no_grad():
+        #     if args.render_test:
+        #         # render_test switches to test poses
+        #         images = images[i_test]
+        #     else:
+        #         # Default is smoother render_poses path
+        #         images = None
 
-            testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
-            os.makedirs(testsavedir, exist_ok=True)
-            print('test poses shape', render_poses.shape)
+        #     testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
+        #     os.makedirs(testsavedir, exist_ok=True)
+        #     print('test poses shape', render_poses.shape)
 
-            rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
-            print('Done rendering', testsavedir)
-            imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
+        #     rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
+        #     print('Done rendering', testsavedir)
+        #     imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
 
-            return
+        #     return
     
     # Prepare raybatch tensor if batching random rays
     N_rand = args.N_rand
@@ -1058,11 +1072,27 @@ def train():
             #     imageio.mimwrite(moviebase + 'rgb_still.mp4', to8b(rgbs_still), fps=30, quality=8)
 
         if i%args.i_testset==0 and i > 0:
-            testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
+            print('Test image generation...')
+
+            # Save path
+            testsavedir = os.path.join(
+                basedir, expname, 'testset_{:06d}'.format(i))            
             os.makedirs(testsavedir, exist_ok=True)
-            print('test poses shape', poses[i_test].shape)
+
+            test_images = images[i_test]
+            test_poses = torch.Tensor(poses[i_test]).to(device)
+            test_timestep = torch.Tensor(times[i_test]).to(device)
+
             with torch.no_grad():
-                rgbs,depths,psnrs,accs = render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
+                rgbs,depths,psnrs,accs = render_path(
+                    test_poses, 
+                    hwf, 
+                    K,
+                    test_timestep,
+                    args.chunk, 
+                    render_kwargs_test, 
+                    gt_imgs=test_images, 
+                    savedir=testsavedir)
             
             writer.add_image('gt', to8b(images[i_test][0]), i, dataformats='HWC')
             writer.add_image('rgb', to8b(rgbs[0]), i, dataformats='HWC')

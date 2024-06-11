@@ -343,6 +343,7 @@ class DirectTemporalNeRFSmall(nn.Module):
             input_dim=3, 
             input_dim_views=3,
             input_dim_time=3,
+            encoding_lambda_call=None
             ):
         super(DirectTemporalNeRFSmall, self).__init__()
 
@@ -412,7 +413,6 @@ class DirectTemporalNeRFSmall(nn.Module):
     def forward_time_net(self, points, timestep):
         assert len(torch.unique(timestep[:, :1])) == 1, "Only accepts all points from same time"
 
-        # import pdb;pdb.set_trace()
         x = torch.cat([points, timestep], dim=-1)
 
         for i, layer in enumerate(self.time_net):
@@ -424,7 +424,6 @@ class DirectTemporalNeRFSmall(nn.Module):
 
 
     def forward(self, x):
-        # import pdb;pdb.set_trace()
         points, views, timestep = torch.split(
             x, 
             [self.input_dim, self.input_dim_views, self.input_dim_time], 
@@ -462,4 +461,7 @@ class DirectTemporalNeRFSmall(nn.Module):
         outputs = torch.cat([color, sigma.unsqueeze(dim=-1)], -1)
 
         return outputs
+
+
+
 
