@@ -84,10 +84,6 @@ def run_network(inputs, viewdirs, timestep, model, embed_fn, embeddirs_fn, embed
     return outputs
 
 
-
-
-
-
 def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0):
 
     H, W, focal = hwf
@@ -160,11 +156,7 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
 
     return rgbs, depths
 
-
-def create_nerf(args):
-    """Instantiate NeRF's MLP model.
-    """
-    ### EMBEDDERS
+def create_embeddings(args):
     # Hash embedder = 1 
     embed_fn, input_ch = get_embedder(args.multires, args, i=args.i_embed)
     # Cos/Sin embedder = 0
@@ -175,7 +167,7 @@ def create_nerf(args):
     if args.i_embed==1:
         # hashed embedding table
         embedding_params = list(embed_fn.parameters())
-
+    # print(embedding_params)
     
 
     input_ch_views = 0
@@ -183,6 +175,31 @@ def create_nerf(args):
     if args.use_viewdirs:
         # if using hashed for xyz, use SH for views
         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args, i=args.i_embed_views)
+
+    output = {
+        'point_fn':embed_fn,
+        'point_dim':input_ch,
+        'time_fn':embedtime_fn,
+        'time_dim':input_ch_time,
+        'views_fn':embeddirs_fn,
+        'views_dim':input_ch_views,
+        'embedding_params':embedding_params
+    }
+
+    return output
+
+
+def create_nerf(args):
+    """Instantiate NeRF's MLP model.
+    """
+    output = create_embeddings(args)
+    input_ch = output['point_dim']
+    input_ch_views = output['views_dim']
+    input_ch_time = output['time_dim']
+    embedding_params = output['embedding_params']
+    embed_fn = output['point_fn']
+    embeddirs_fn = output['views_fn']
+    embedtime_fn = output['time_fn']
 
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
@@ -199,20 +216,13 @@ def create_nerf(args):
             input_dim_views=input_ch_views,
             input_dim_time=input_ch_time)
         model.to(device)
-
-        # model = NeRFSmall(num_layers=2,
-        #                 hidden_dim=64,
-        #                 geo_feat_dim=15,
-        #                 num_layers_color=3,
-        #                 hidden_dim_color=64,
-        #                 input_ch=input_ch, input_ch_views=input_ch_views).to(device)
     else:
         model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
                  input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
     
     grad_vars = list(model.parameters())
-
+    # print(grad_vars)
     model_fine = None
 
     if args.N_importance > 0:
@@ -232,6 +242,8 @@ def create_nerf(args):
                           input_ch=input_ch, output_ch=output_ch, skips=skips,
                           input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
         grad_vars += list(model_fine.parameters())
+        # print(grad_vars)
+        # exit()
 
     network_query_fn = lambda inputs,viewdirs,timestep,network_fn:run_network(
         inputs, 
@@ -304,10 +316,6 @@ def create_nerf(args):
     render_kwargs_test['raw_noise_std'] = 0.
 
     return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
-
-
-
-
 
 
 def config_parser():
