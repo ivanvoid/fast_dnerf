@@ -118,8 +118,8 @@ def get_voxel_vertices(xyz, bounding_box, resolution, log2_hashmap_size):
 
 
 
-if __name__=="__main__":
-    with open("data/nerf_synthetic/chair/transforms_train.json", "r") as f:
-        camera_transforms = json.load(f)
+# if __name__=="__main__":
+#     with open("data/nerf_synthetic/chair/transforms_train.json", "r") as f:
+#         camera_transforms = json.load(f)
     
-    bounding_box = get_bbox3d_for_blenderobj(camera_transforms, 800, 800)
+#     bounding_box = get_bbox3d_for_blenderobj(camera_transforms, 800, 800)

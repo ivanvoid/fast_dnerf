@@ -22,11 +22,11 @@ from loss import sigma_sparsity_loss, total_variation_loss
 
 from render import *
 
-from load_llff import load_llff_data
-from load_deepvoxels import load_dv_data
-from load_blender import load_blender_data
-from load_scannet import load_scannet_data
-from load_LINEMOD import load_LINEMOD_data
+from data_utils.load_llff import load_llff_data
+from data_utils.load_deepvoxels import load_dv_data
+from data_utils.load_blender import load_blender_data
+from data_utils.load_scannet import load_scannet_data
+from data_utils.load_LINEMOD import load_LINEMOD_data
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -259,21 +259,12 @@ def load_checkpoints(args, coarse_model, fine_model, embeddings, optimizer):
     return start
 
 def create_nerf(args):
-    """Instantiate NeRF's MLP model.
-    """
+    '''
+    Instantiate NeRF's MLP model.
+    '''
 
     # Embeddings 
     embeddings = create_embeddings(args)
-    # input_ch = embeddings['point_dim']
-    # input_ch_views = embeddings['views_dim']
-    # input_ch_time = embeddings['time_dim']
-    # embedding_params = embeddings['optimization_parameters']
-    # embed_fn = embeddings['point_fn']
-    # embeddirs_fn = embeddings['views_fn']
-    # embedtime_fn = embeddings['time_fn']
-
-    # output_ch = 5 if args.N_importance > 0 else 4
-    # skips = [4]
 
     # Coarse model
     coarse_model = create_coarse_model(args, embeddings)
@@ -311,12 +302,6 @@ def create_nerf(args):
         'white_bkgd' : args.white_bkgd,
         'raw_noise_std' : args.raw_noise_std,
     }
-
-    # NDC only good for LLFF-style forward facing data
-    # if args.dataset_type != 'llff' or args.no_ndc:
-    #     print('Not ndc!')
-    #     render_kwargs_train['ndc'] = False
-    #     render_kwargs_train['lindisp'] = args.lindisp
 
     render_kwargs_test = {k : render_kwargs_train[k] for k in render_kwargs_train}
     render_kwargs_test['perturb'] = False

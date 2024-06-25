@@ -6,7 +6,7 @@ import json
 import torch.nn.functional as F
 import cv2
 
-from utils import get_bbox3d_for_blenderobj
+from data_utils.utils import get_bbox3d_for_blenderobj
 
 trans_t = lambda t : torch.Tensor([
     [1,0,0,0],

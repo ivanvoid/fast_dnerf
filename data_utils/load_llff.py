@@ -1,7 +1,7 @@
 import numpy as np
 import os, imageio
 
-from utils import get_bbox3d_for_llff
+from data_utils.utils import get_bbox3d_for_llff
 
 ########## Slightly modified version of LLFF data loading code 
 ##########  see https://github.com/Fyusion/LLFF for original
