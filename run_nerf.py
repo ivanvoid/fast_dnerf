@@ -220,7 +220,13 @@ def create_fine_model(args, embeddings):
 
     return fine_model
 
-# def create_optimizer():
+def create_optimizer(args, parameters_of_models, parameters_of_embeddings):
+    optimizer = RAdam([
+                        {'params': parameters_of_models, 'weight_decay': 1e-6},
+                        {'params': parameters_of_embeddings, 'eps': 1e-15}
+                    ], lr=args.lrate, betas=(0.9, 0.99))
+    # optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
+    return optimizer
 
 
 def load_checkpoints(args, coarse_model, fine_model, embeddings, optimizer):
@@ -288,13 +294,7 @@ def create_nerf(args):
         netchunk=args.netchunk)
 
     # Create optimizer
-    if args.i_embed==1:
-        optimizer = RAdam([
-                            {'params': grad_vars, 'weight_decay': 1e-6},
-                            {'params': embedding_params, 'eps': 1e-15}
-                        ], lr=args.lrate, betas=(0.9, 0.99))
-    else:
-        optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
+    optimizer = create_optimizer(args, grad_vars, embedding_params)
 
     # Load checkpoints
     start = load_checkpoints(args, coarse_model, fine_model, embeddings, optimizer)
