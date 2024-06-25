@@ -183,7 +183,7 @@ def create_embeddings(args):
         'time_dim':input_ch_time,
         'views_fn':embeddirs_fn,
         'views_dim':input_ch_views,
-        'embedding_params':embedding_params
+        'optimization_parameters':embedding_params
     }
 
     return output
@@ -264,37 +264,37 @@ def create_nerf(args):
 
     # Embeddings 
     embeddings = create_embeddings(args)
-    input_ch = embeddings['point_dim']
-    input_ch_views = embeddings['views_dim']
-    input_ch_time = embeddings['time_dim']
-    embedding_params = embeddings['embedding_params']
-    embed_fn = embeddings['point_fn']
-    embeddirs_fn = embeddings['views_fn']
-    embedtime_fn = embeddings['time_fn']
+    # input_ch = embeddings['point_dim']
+    # input_ch_views = embeddings['views_dim']
+    # input_ch_time = embeddings['time_dim']
+    # embedding_params = embeddings['optimization_parameters']
+    # embed_fn = embeddings['point_fn']
+    # embeddirs_fn = embeddings['views_fn']
+    # embedtime_fn = embeddings['time_fn']
 
-    output_ch = 5 if args.N_importance > 0 else 4
-    skips = [4]
+    # output_ch = 5 if args.N_importance > 0 else 4
+    # skips = [4]
 
     # Coarse model
     coarse_model = create_coarse_model(args, embeddings)
-    grad_vars = list(coarse_model.parameters())
+    models_parameters = list(coarse_model.parameters())
 
     # Fine model
     fine_model = create_fine_model(args, embeddings)
-    grad_vars += list(fine_model.parameters())
+    models_parameters += list(fine_model.parameters())
 
     network_query_fn = lambda inputs,viewdirs,timestep,network_fn:run_network(
         inputs, 
         viewdirs,
         timestep, 
         network_fn,
-        embed_fn=embed_fn,
-        embeddirs_fn=embeddirs_fn,
-        embedtime_fn=embedtime_fn,
+        embed_fn=embeddings['point_fn'],
+        embeddirs_fn=embeddings['views_fn'],
+        embedtime_fn=embeddings['time_fn'],
         netchunk=args.netchunk)
 
     # Create optimizer
-    optimizer = create_optimizer(args, grad_vars, embedding_params)
+    optimizer = create_optimizer(args, models_parameters, embeddings['optimization_parameters'])
 
     # Load checkpoints
     start = load_checkpoints(args, coarse_model, fine_model, embeddings, optimizer)
@@ -306,23 +306,23 @@ def create_nerf(args):
         'network_fine' : fine_model,
         'N_samples' : args.N_samples,
         'network_fn' : coarse_model,
-        'embed_fn': embed_fn,
+        'embed_fn': embeddings['point_fn'],
         'use_viewdirs' : args.use_viewdirs,
         'white_bkgd' : args.white_bkgd,
         'raw_noise_std' : args.raw_noise_std,
     }
 
     # NDC only good for LLFF-style forward facing data
-    if args.dataset_type != 'llff' or args.no_ndc:
-        print('Not ndc!')
-        render_kwargs_train['ndc'] = False
-        render_kwargs_train['lindisp'] = args.lindisp
+    # if args.dataset_type != 'llff' or args.no_ndc:
+    #     print('Not ndc!')
+    #     render_kwargs_train['ndc'] = False
+    #     render_kwargs_train['lindisp'] = args.lindisp
 
     render_kwargs_test = {k : render_kwargs_train[k] for k in render_kwargs_train}
     render_kwargs_test['perturb'] = False
     render_kwargs_test['raw_noise_std'] = 0.
 
-    return render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer
+    return render_kwargs_train, render_kwargs_test, start, models_parameters, optimizer
 
 
 def config_parser():
