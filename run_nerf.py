@@ -188,62 +188,62 @@ def create_embeddings(args):
 
     return output
 
+def create_coarse_model(args, embeddings):
+    coarse_model = 0
 
-def create_nerf(args):
-    """Instantiate NeRF's MLP model.
-    """
-    output = create_embeddings(args)
-    input_ch = output['point_dim']
-    input_ch_views = output['views_dim']
-    input_ch_time = output['time_dim']
-    embedding_params = output['embedding_params']
-    embed_fn = output['point_fn']
-    embeddirs_fn = output['views_fn']
-    embedtime_fn = output['time_fn']
-
-    output_ch = 5 if args.N_importance > 0 else 4
-    skips = [4]
-
-    
-    if args.i_embed==1:
-        model = DirectTemporalNeRFSmall(
+    coarse_model = DirectTemporalNeRFSmall(
             n_layers=2,
             hidden_dim=64,
             geo_feat_dim=15,
             n_layers_color=3,
             hidden_dim_color=64,
-            input_dim=input_ch, 
-            input_dim_views=input_ch_views,
-            input_dim_time=input_ch_time)
-        model.to(device)
-    else:
-        model = NeRF(D=args.netdepth, W=args.netwidth,
-                 input_ch=input_ch, output_ch=output_ch, skips=skips,
-                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
-    
-    grad_vars = list(model.parameters())
-    # print(grad_vars)
-    model_fine = None
+            input_dim=embeddings['point_dim'], 
+            input_dim_views=embeddings['views_dim'],
+            input_dim_time=embeddings['time_dim'])
+    coarse_model.to(device)    
 
-    if args.N_importance > 0:
-        if args.i_embed==1:
-            model_fine = DirectTemporalNeRFSmall(
-                n_layers=2,
-                hidden_dim=64,
-                geo_feat_dim=15,
-                n_layers_color=3,
-                hidden_dim_color=64,
-                input_dim=input_ch, 
-                input_dim_views=input_ch_views,
-                input_dim_time=input_ch_time)
-            model_fine.to(device)
-        else:
-            model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
-                          input_ch=input_ch, output_ch=output_ch, skips=skips,
-                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
-        grad_vars += list(model_fine.parameters())
-        # print(grad_vars)
-        # exit()
+    return coarse_model
+
+def create_fine_model(args, embeddings):
+    fine_model = 0
+
+    fine_model = DirectTemporalNeRFSmall(
+        n_layers=2,
+        hidden_dim=64,
+        geo_feat_dim=15,
+        n_layers_color=3,
+        hidden_dim_color=64,
+        input_dim=embeddings['point_dim'], 
+        input_dim_views=embeddings['views_dim'],
+        input_dim_time=embeddings['time_dim'])
+    fine_model.to(device)
+
+    return fine_model
+
+def create_nerf(args):
+    """Instantiate NeRF's MLP model.
+    """
+
+    # Embeddings 
+    embeddings = create_embeddings(args)
+    input_ch = embeddings['point_dim']
+    input_ch_views = embeddings['views_dim']
+    input_ch_time = embeddings['time_dim']
+    embedding_params = embeddings['embedding_params']
+    embed_fn = embeddings['point_fn']
+    embeddirs_fn = embeddings['views_fn']
+    embedtime_fn = embeddings['time_fn']
+
+    output_ch = 5 if args.N_importance > 0 else 4
+    skips = [4]
+
+    # Coarse model
+    coarse_model = create_coarse_model(args, embeddings)
+    grad_vars = list(coarse_model.parameters())
+
+    # Fine model
+    model_fine = create_fine_model(args, embeddings)
+    grad_vars += list(model_fine.parameters())
 
     network_query_fn = lambda inputs,viewdirs,timestep,network_fn:run_network(
         inputs, 
@@ -286,7 +286,7 @@ def create_nerf(args):
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
 
         # Load model
-        model.load_state_dict(ckpt['network_fn_state_dict'])
+        coarse_model.load_state_dict(ckpt['network_fn_state_dict'])
         if model_fine is not None:
             model_fine.load_state_dict(ckpt['network_fine_state_dict'])
         if args.i_embed==1:
@@ -298,7 +298,7 @@ def create_nerf(args):
         'N_importance' : args.N_importance,
         'network_fine' : model_fine,
         'N_samples' : args.N_samples,
-        'network_fn' : model,
+        'network_fn' : coarse_model,
         'embed_fn': embed_fn,
         'use_viewdirs' : args.use_viewdirs,
         'white_bkgd' : args.white_bkgd,
