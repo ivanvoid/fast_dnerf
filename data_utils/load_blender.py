@@ -136,3 +136,53 @@ def load_blender_data(basedir, half_res=False, testskip=1):
     }
 
     return output_dict
+
+
+class BlenderDataset:
+    def __init__(self):
+        pass
+        # blender_data = load_blender_data(
+        #         cfg.datadir, cfg.half_res, cfg.testskip)
+        
+        # images = blender_data['images']
+        # poses = blender_data['poses']
+        # render_poses = blender_data['render_poses']
+        # hwf = blender_data['hwf']
+        # i_split = blender_data['i_split']
+        # bounding_box = blender_data['bounding_box']
+        # times = blender_data['times']
+        # render_times = blender_data['render_times']
+
+        # cfg.bounding_box = bounding_box
+        # print('Loaded blender', images.shape, render_poses.shape, hwf, cfg.datadir)
+        # i_train, i_val, i_test = i_split
+
+        # near = 2.
+        # far = 6.
+
+        # if cfg.white_bkgd:
+        #     images = images[...,:3]*images[...,-1:] + (1.-images[...,-1:])
+        # else:
+        #     images = images[...,:3]
+
+        # # Data time check
+        # min_time, max_time = times[i_train[0]], times[i_train[-1]]
+        # assert min_time == 0., "time must start at 0"
+        # assert max_time == 1., "max time must be 1"
+
+        # # Cast intrinsics to right types
+        # H, W, focal = hwf
+        # H, W = int(H), int(W)
+        # hwf = [H, W, focal]
+
+        # if K is None:
+        #     K = np.array([
+        #         [focal, 0, 0.5*W],
+        #         [0, focal, 0.5*H],
+        #         [0, 0, 1]
+        #     ])
+
+    def __getitem__(self, idx):
+        pass
+    def __len__(self):
+        return 0
