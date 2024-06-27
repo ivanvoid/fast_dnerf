@@ -747,7 +747,6 @@ def train():
     use_batching = not args.no_batching
     if use_batching:
         # For random ray batching
-        pdb.set_trace()
         print('get rays')
          # [N, ro+rd, H, W, 3]
         rays = np.stack([get_rays_np(H, W, K, p) for p in poses[:,:3,:4]], 0)
@@ -762,11 +761,26 @@ def train():
         # train images only
         rays_rgb = np.stack([rays_rgb[i] for i in i_train], 0) 
         
+        # Time 
+        train_times = times[i_train]
+        times_expand = np.zeros(rays_rgb.shape[0:3])
+        for ii in range(rays_rgb.shape[0]):
+            times_expand[ii].fill(train_times[ii])
+        times_expand = times_expand.reshape(-1)
+
         # [(N-1)*H*W, ro+rd+rgb, 3]
         rays_rgb = np.reshape(rays_rgb, [-1,3,3]) 
         rays_rgb = rays_rgb.astype(np.float32)
+        
         print('shuffle rays')
-        np.random.shuffle(rays_rgb)
+        # np.random.shuffle(rays_rgb)
+
+        # New shuffle
+        random_indices = np.arange(rays_rgb.shape[0])
+        np.random.shuffle(random_indices)
+
+        rays_rgb = rays_rgb[random_indices]
+        times_expand = times_expand[random_indices]
 
         print('done')
         i_batch = 0
@@ -774,10 +788,11 @@ def train():
     # Move training data to GPU
     if use_batching:
         images = torch.Tensor(images).to(device)
-    poses = torch.Tensor(poses).to(device)
-    if use_batching:
         rays_rgb = torch.Tensor(rays_rgb).to(device)
-    times = torch.Tensor(times).to(device)
+        times_expand = torch.Tensor(times_expand).to(device)
+    else:
+        times = torch.Tensor(times).to(device)
+    poses = torch.Tensor(poses).to(device)
 
 
     N_iters = args.n_iters + 1
@@ -799,9 +814,11 @@ def train():
         # Sample random ray batch
         if use_batching:
             # Random over all images
+            pdb.set_trace()
             batch = rays_rgb[i_batch:i_batch+N_rand] # [B, 2+1, 3*?]
             batch = torch.transpose(batch, 0, 1)
             batch_rays, target_s = batch[:2], batch[2]
+            batch_times = times_expand[i_batch:i_batch+N_rand]
 
             i_batch += N_rand
             if i_batch >= rays_rgb.shape[0]:
@@ -843,9 +860,13 @@ def train():
                 target_s = target[select_coords[:, 0], select_coords[:, 1]]  # (N_rand, 3)
 
         #####  Core optimization loop  #####
-        rgb, depth, acc, extras = render(H, W, K, chunk=args.chunk, rays=batch_rays,
-                                                verbose=i < 10, retraw=True,
-                                                **render_kwargs_train)
+        rgb, depth, acc, extras = render(
+            H, W, K, 
+            chunk=args.chunk, 
+            rays=batch_rays,
+            verbose=i < 10, 
+            retraw=True,
+            **render_kwargs_train)
 
         optimizer.zero_grad()
         img_loss = img2mse(rgb, target_s)
