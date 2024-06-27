@@ -50,7 +50,8 @@ def batchify(fn, chunk):
     return ret
 
 
-def run_network(inputs, viewdirs, times, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
+def run_network(inputs, viewdirs, times, fn, 
+                embed_fn, embeddirs_fn, embed_times_fn, netchunk=1024*64):
     """Prepares inputs and applies network 'fn'.
     Args:
         inputs: array of shape [chunk_size, N_samples, 3] 3D coarse points sampled
@@ -70,11 +71,10 @@ def run_network(inputs, viewdirs, times, fn, embed_fn, embeddirs_fn, netchunk=10
         embedded = torch.cat([embedded, embedded_dirs], -1)
 
     if times is not None:
-        pass
-        # input_times = times[:,None].expand(inputs.shape)
-        # input_times_flat = torch.reshape(input_times, [-1, input_times.shape[-1]])
-        # embedded_times = embeddirs_fn(input_times_flat)
-        # embedded = torch.cat([embedded, embedded_times], -1)
+        input_times = times[:,None].expand(inputs.shape)
+        input_times_flat = torch.reshape(input_times, [-1, input_times.shape[-1]])
+        embedded_times = embed_times_fn(input_times_flat)
+        embedded = torch.cat([embedded, embedded_times], -1)
     
     # outputs_flat = batchify(fn, netchunk)(embedded)
     outputs_flat = stupid_bachify(fn, netchunk,embedded)
@@ -266,16 +266,34 @@ def create_nerf(args):
         # if using hashed for xyz, use SH for views
         embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args, i=args.i_embed_views)
 
+    # Time
+    embed_times_fn, input_ch_times = get_embedder(
+        args.multires_views, args, i=args.i_embed_views, input_dim=1)
+
+    # Mid embedding function. For D-NeRF, predictions embedding
+    embed_mid_fn, embed_ch_mid = get_embedder(args.multires_views, args, i=0)
+
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
 
     if args.i_embed==1:
-        model = NeRFSmall(num_layers=2,
+        # model = NeRFSmall(num_layers=2,
+        #                 hidden_dim=64,
+        #                 geo_feat_dim=15,
+        #                 num_layers_color=3,
+        #                 hidden_dim_color=64,
+        #                 input_ch=input_ch, input_ch_views=input_ch_views).to(device)
+        model = DNeRFSmall(num_layers=2,
                         hidden_dim=64,
                         geo_feat_dim=15,
                         num_layers_color=3,
                         hidden_dim_color=64,
-                        input_ch=input_ch, input_ch_views=input_ch_views).to(device)
+                        input_ch=input_ch, 
+                        input_ch_views=input_ch_views,
+                        input_ch_times=input_ch_times,
+                        embed_mid_fn=embed_mid_fn, 
+                        embed_ch_mid=embed_ch_mid
+                        ).to(device)
     else:
         model = NeRF(D=args.netdepth, W=args.netwidth,
                  input_ch=input_ch, output_ch=output_ch, skips=skips,
@@ -286,12 +304,23 @@ def create_nerf(args):
 
     if args.N_importance > 0:
         if args.i_embed==1:
-            model_fine = NeRFSmall(num_layers=2,
+            # model_fine = NeRFSmall(num_layers=2,
+            #             hidden_dim=64,
+            #             geo_feat_dim=15,
+            #             num_layers_color=3,
+            #             hidden_dim_color=64,
+            #             input_ch=input_ch, input_ch_views=input_ch_views).to(device)
+            model_fine = DNeRFSmall(num_layers=2,
                         hidden_dim=64,
                         geo_feat_dim=15,
                         num_layers_color=3,
                         hidden_dim_color=64,
-                        input_ch=input_ch, input_ch_views=input_ch_views).to(device)
+                        input_ch=input_ch, 
+                        input_ch_views=input_ch_views,
+                        input_ch_times=input_ch_times,
+                        embed_mid_fn=embed_mid_fn, 
+                        embed_ch_mid=embed_ch_mid
+                        ).to(device)
         else:
             model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
                           input_ch=input_ch, output_ch=output_ch, skips=skips,
@@ -303,6 +332,7 @@ def create_nerf(args):
         network_fn,
         embed_fn=embed_fn,
         embeddirs_fn=embeddirs_fn,
+        embed_times_fn=embed_times_fn,
         netchunk=args.netchunk)
 
     # Create optimizer

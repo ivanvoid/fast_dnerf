@@ -46,13 +46,13 @@ class Embedder:
         return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
 
 
-def get_embedder(multires, args, i=0):
+def get_embedder(multires, args, i=0, input_dim=3):
     if i == -1:
-        return nn.Identity(), 3
+        return nn.Identity(), input_dim
     elif i==0:
         embed_kwargs = {
                     'include_input' : True,
-                    'input_dims' : 3,
+                    'input_dims' : input_dim,
                     'max_freq_log2' : multires-1,
                     'num_freqs' : multires,
                     'log_sampling' : True,
@@ -71,6 +71,97 @@ def get_embedder(multires, args, i=0):
         embed = SHEncoder()
         out_dim = embed.out_dim
     return embed, out_dim
+
+
+# Ray helpers
+def get_rays(H, W, K, c2w):
+    i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid has indexing='ij'
+    i = i.t()
+    j = j.t()
+    dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
+    # Rotate ray directions from camera frame to the world frame
+    rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    # Translate camera frame's origin to the world frame. It is the origin of all rays.
+    rays_o = c2w[:3,-1].expand(rays_d.shape)
+    return rays_o, rays_d
+
+
+def get_rays_np(H, W, K, c2w):
+    i, j = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing='xy')
+    dirs = np.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -np.ones_like(i)], -1)
+    # Rotate ray directions from camera frame to the world frame
+    rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
+    # Translate camera frame's origin to the world frame. It is the origin of all rays.
+    rays_o = np.broadcast_to(c2w[:3,-1], np.shape(rays_d))
+    return rays_o, rays_d
+
+
+def ndc_rays(H, W, focal, near, rays_o, rays_d):
+    # Shift ray origins to near plane
+    t = -(near + rays_o[...,2]) / rays_d[...,2]
+    rays_o = rays_o + t[...,None] * rays_d
+    
+    # Projection
+    o0 = -1./(W/(2.*focal)) * rays_o[...,0] / rays_o[...,2]
+    o1 = -1./(H/(2.*focal)) * rays_o[...,1] / rays_o[...,2]
+    o2 = 1. + 2. * near / rays_o[...,2]
+
+    d0 = -1./(W/(2.*focal)) * (rays_d[...,0]/rays_d[...,2] - rays_o[...,0]/rays_o[...,2])
+    d1 = -1./(H/(2.*focal)) * (rays_d[...,1]/rays_d[...,2] - rays_o[...,1]/rays_o[...,2])
+    d2 = -2. * near / rays_o[...,2]
+    
+    rays_o = torch.stack([o0,o1,o2], -1)
+    rays_d = torch.stack([d0,d1,d2], -1)
+    
+    return rays_o, rays_d
+
+
+# Hierarchical sampling (section 5.2)
+def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
+    # Get pdf
+    weights = weights + 1e-5 # prevent nans
+    pdf = weights / torch.sum(weights, -1, keepdim=True)
+    cdf = torch.cumsum(pdf, -1)
+    cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # (batch, len(bins))
+
+    # Take uniform samples
+    if det:
+        u = torch.linspace(0., 1., steps=N_samples)
+        u = u.expand(list(cdf.shape[:-1]) + [N_samples])
+    else:
+        u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
+
+    # Pytest, overwrite u with numpy's fixed random numbers
+    if pytest:
+        np.random.seed(0)
+        new_shape = list(cdf.shape[:-1]) + [N_samples]
+        if det:
+            u = np.linspace(0., 1., N_samples)
+            u = np.broadcast_to(u, new_shape)
+        else:
+            u = np.random.rand(*new_shape)
+        u = torch.Tensor(u)
+
+    # Invert CDF
+    u = u.contiguous()
+    inds = torch.searchsorted(cdf, u, right=True)
+    below = torch.max(torch.zeros_like(inds-1), inds-1)
+    above = torch.min((cdf.shape[-1]-1) * torch.ones_like(inds), inds)
+    inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
+
+    # cdf_g = tf.gather(cdf, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
+    # bins_g = tf.gather(bins, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
+    matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
+    cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
+    bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
+
+    denom = (cdf_g[...,1]-cdf_g[...,0])
+    denom = torch.where(denom<1e-5, torch.ones_like(denom), denom)
+    t = (u-cdf_g[...,0])/denom
+    samples = bins_g[...,0] + t * (bins_g[...,1]-bins_g[...,0])
+
+    return samples
+
 
 
 # Model
@@ -166,7 +257,8 @@ class NeRFSmall(nn.Module):
                  geo_feat_dim=15,
                  num_layers_color=4,
                  hidden_dim_color=64,
-                 input_ch=3, input_ch_views=3,
+                 input_ch=3, 
+                 input_ch_views=3,
                  ):
         super(NeRFSmall, self).__init__()
 
@@ -240,92 +332,79 @@ class NeRFSmall(nn.Module):
         return outputs
 
 
+# Small NeRF for Hash embeddings
+class DNeRFSmall(nn.Module):
+    def __init__(self,
+                 num_layers=3,
+                 hidden_dim=64,
+                 geo_feat_dim=15,
+                 num_layers_color=4,
+                 hidden_dim_color=64,
+                 input_ch=3, 
+                 input_ch_views=3,
+                 input_ch_times=1,
+                 embed_mid_fn=None, 
+                 embed_ch_mid=None,
+                 skips=[4]
+                 ):
+        super(DNeRFSmall, self).__init__()
 
-# Ray helpers
-def get_rays(H, W, K, c2w):
-    i, j = torch.meshgrid(torch.linspace(0, W-1, W), torch.linspace(0, H-1, H))  # pytorch's meshgrid has indexing='ij'
-    i = i.t()
-    j = j.t()
-    dirs = torch.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -torch.ones_like(i)], -1)
-    # Rotate ray directions from camera frame to the world frame
-    rays_d = torch.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
-    # Translate camera frame's origin to the world frame. It is the origin of all rays.
-    rays_o = c2w[:3,-1].expand(rays_d.shape)
-    return rays_o, rays_d
+        self.nerf = NeRFSmall(
+                 num_layers=num_layers,
+                 hidden_dim=hidden_dim,
+                 geo_feat_dim=geo_feat_dim,
+                 num_layers_color=num_layers_color,
+                 hidden_dim_color=hidden_dim_color,
+                 input_ch=embed_ch_mid, 
+                 input_ch_views=input_ch_views)
+        
+        self.skips = skips
+        self.input_ch = input_ch
+        self.input_ch_views = input_ch_views
+        self.input_ch_times = input_ch_times
+        self.num_layers = num_layers
+        self.hidden_dim = hidden_dim
+        self.geo_feat_dim = geo_feat_dim
 
+        self.embed_mid_fn = embed_mid_fn 
+        self.embed_ch_mid = embed_ch_mid
 
-def get_rays_np(H, W, K, c2w):
-    i, j = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing='xy')
-    dirs = np.stack([(i-K[0][2])/K[0][0], -(j-K[1][2])/K[1][1], -np.ones_like(i)], -1)
-    # Rotate ray directions from camera frame to the world frame
-    rays_d = np.sum(dirs[..., np.newaxis, :] * c2w[:3,:3], -1)  # dot product, equals to: [c2w.dot(dir) for dir in dirs]
-    # Translate camera frame's origin to the world frame. It is the origin of all rays.
-    rays_o = np.broadcast_to(c2w[:3,-1], np.shape(rays_d))
-    return rays_o, rays_d
+        self.timenet = self.create_time_net()
 
+    def create_time_net(self):
+        layers = [nn.Linear(self.input_ch+self.input_ch_times, self.hidden_dim)]
+        for i in range(self.num_layers - 1):
+            in_channels = self.hidden_dim
+            if i in self.skips:
+                in_channels += self.input_ch
 
-def ndc_rays(H, W, focal, near, rays_o, rays_d):
-    # Shift ray origins to near plane
-    t = -(near + rays_o[...,2]) / rays_d[...,2]
-    rays_o = rays_o + t[...,None] * rays_d
-    
-    # Projection
-    o0 = -1./(W/(2.*focal)) * rays_o[...,0] / rays_o[...,2]
-    o1 = -1./(H/(2.*focal)) * rays_o[...,1] / rays_o[...,2]
-    o2 = 1. + 2. * near / rays_o[...,2]
+            layers += [nn.Linear(in_channels, self.hidden_dim)]
+        layers += [nn.Linear(self.hidden_dim, 3)]
+        return nn.ModuleList(layers)
 
-    d0 = -1./(W/(2.*focal)) * (rays_d[...,0]/rays_d[...,2] - rays_o[...,0]/rays_o[...,2])
-    d1 = -1./(H/(2.*focal)) * (rays_d[...,1]/rays_d[...,2] - rays_o[...,1]/rays_o[...,2])
-    d2 = -2. * near / rays_o[...,2]
-    
-    rays_o = torch.stack([o0,o1,o2], -1)
-    rays_d = torch.stack([d0,d1,d2], -1)
-    
-    return rays_o, rays_d
+    def query_time(self, points, timesteps):
+        h = torch.cat([points, timesteps], dim=-1)
+        for i, layer in enumerate(self.timenet):
+            h = layer(h)
+            if i != len(self.timenet):
+                h = F.relu(h)
+            if i in self.skips:
+                h = torch.cat([points, h], -1)
+        return h
 
+    def forward(self, x):
+        # import pdb; pdb.set_trace()
+        input_pts, input_views, input_times = torch.split(
+            x, 
+            [self.input_ch, self.input_ch_views, self.input_ch_times], 
+            dim=-1)
+        
+        dx = self.query_time(input_pts, input_times)
+        input_pts_orig = input_pts[:, :3]
+        points = self.embed_mid_fn(dx + input_pts_orig)
 
-# Hierarchical sampling (section 5.2)
-def sample_pdf(bins, weights, N_samples, det=False, pytest=False):
-    # Get pdf
-    weights = weights + 1e-5 # prevent nans
-    pdf = weights / torch.sum(weights, -1, keepdim=True)
-    cdf = torch.cumsum(pdf, -1)
-    cdf = torch.cat([torch.zeros_like(cdf[...,:1]), cdf], -1)  # (batch, len(bins))
+        nerf_input = torch.cat([points, input_views], dim=-1)
+        outputs = self.nerf(nerf_input)
 
-    # Take uniform samples
-    if det:
-        u = torch.linspace(0., 1., steps=N_samples)
-        u = u.expand(list(cdf.shape[:-1]) + [N_samples])
-    else:
-        u = torch.rand(list(cdf.shape[:-1]) + [N_samples])
+        return outputs
 
-    # Pytest, overwrite u with numpy's fixed random numbers
-    if pytest:
-        np.random.seed(0)
-        new_shape = list(cdf.shape[:-1]) + [N_samples]
-        if det:
-            u = np.linspace(0., 1., N_samples)
-            u = np.broadcast_to(u, new_shape)
-        else:
-            u = np.random.rand(*new_shape)
-        u = torch.Tensor(u)
-
-    # Invert CDF
-    u = u.contiguous()
-    inds = torch.searchsorted(cdf, u, right=True)
-    below = torch.max(torch.zeros_like(inds-1), inds-1)
-    above = torch.min((cdf.shape[-1]-1) * torch.ones_like(inds), inds)
-    inds_g = torch.stack([below, above], -1)  # (batch, N_samples, 2)
-
-    # cdf_g = tf.gather(cdf, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
-    # bins_g = tf.gather(bins, inds_g, axis=-1, batch_dims=len(inds_g.shape)-2)
-    matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
-    cdf_g = torch.gather(cdf.unsqueeze(1).expand(matched_shape), 2, inds_g)
-    bins_g = torch.gather(bins.unsqueeze(1).expand(matched_shape), 2, inds_g)
-
-    denom = (cdf_g[...,1]-cdf_g[...,0])
-    denom = torch.where(denom<1e-5, torch.ones_like(denom), denom)
-    t = (u-cdf_g[...,0])/denom
-    samples = bins_g[...,0] + t * (bins_g[...,1]-bins_g[...,0])
-
-    return samples
