@@ -46,10 +46,19 @@ class Embedder:
         return torch.cat([fn(inputs) for fn in self.embed_fns], -1)
 
 
-def get_embedder(multires, args, i=0, input_dim=3):
-    if i == -1:
-        return nn.Identity(), 3
-    elif i==0:
+def get_embedder(args, emb_type='', input_dim=None, multires=None):
+    '''
+    emb_type str: Identity, SinCos, Hashm SHE
+    '''
+    assert emb_type != '', 'Select embedding function!'
+    
+    if emb_type == 'Identity':
+        assert input_dim != None, 'Select input dimentions'
+        return nn.Identity(), input_dim
+    
+    elif emb_type == 'SinCos':
+        assert multires != None, 'Select Multiresolution'
+        assert input_dim != None, 'Select input dimentions'
         embed_kwargs = {
                     'include_input' : True,
                     'input_dims' : input_dim,
@@ -57,19 +66,21 @@ def get_embedder(multires, args, i=0, input_dim=3):
                     'num_freqs' : multires,
                     'log_sampling' : True,
                     'periodic_fns' : [torch.sin, torch.cos],
-        }
-        
+        }    
         embedder_obj = Embedder(**embed_kwargs)
         embed = lambda x, eo=embedder_obj : eo.embed(x)
         out_dim = embedder_obj.out_dim
-    elif i==1:
+
+    elif emb_type == 'Hash':
         embed = HashEmbedder(bounding_box=args.bounding_box, \
                             log2_hashmap_size=args.log2_hashmap_size, \
                             finest_resolution=args.finest_res)
         out_dim = embed.out_dim
-    elif i==2:
+        
+    elif emb_type == 'SHE':
         embed = SHEncoder()
         out_dim = embed.out_dim
+    
     return embed, out_dim
 
 
@@ -240,8 +251,6 @@ class NeRFSmall(nn.Module):
         return outputs
 
 
-
-
 ### Hash tempootal NERF
 class DirectTemporalNeRFSmall(nn.Module):
     def __init__(
@@ -374,3 +383,95 @@ class DirectTemporalNeRFSmall(nn.Module):
 
         return outputs
 
+
+# n_layers=2,
+# hidden_dim=64,
+# geo_feat_dim=15,
+# n_layers_color=3,
+# hidden_dim_color=64,
+# input_dim=embeddings['point_dim'], 
+# input_dim_views=embeddings['views_dim'],
+# input_dim_time=embeddings['time_dim'])
+
+class FD_NeRF(nn.Module):
+    def __init__(self,
+                 n_layers=3,
+                 hidden_dim=64,
+                 geo_feat_dim=15,
+                 n_layers_color=4,
+                 hidden_dim_color=64,
+                 input_dim_points=3, 
+                 input_dim_views=3,
+                 input_dim_time=1,
+                 output_dim=4
+                 ):
+        """ 
+        """
+        super(FD_NeRF, self).__init__()
+        
+        ### Set NeRF Network
+        self.n_layers = n_layers
+        self.hidden_dim = hidden_dim
+        self.input_dim_points = input_dim_points
+        self.input_dim_views = input_dim_views
+        self.input_dim_time = input_dim_time
+
+        self.geo_feat_dim = geo_feat_dim
+        self.n_layers_color = n_layers_color
+        self.hidden_dim_color = hidden_dim_color
+
+        self.skips = []
+        
+        linears = [nn.Linear(input_dim_points, self.hidden_dim)]
+        for i in range(self.n_layers):
+            if i not in self.skips:
+                l = nn.Linear(self.hidden_dim, self.hidden_dim)
+            else:
+                l = nn.Linear(self.hidden_dim + input_dim_points, self.hidden_dim)
+            linears += [l]
+        self.linears = nn.ModuleList(linears)
+        
+        ### Implementation according to the official code release (https://github.com/bmild/nerf/blob/master/run_nerf_helpers.py#L104-L105)
+        self.views_linears = nn.ModuleList([
+            nn.Linear(input_dim_views + self.hidden_dim, self.hidden_dim//2)])
+        ### Implementation according to the paper
+        # self.views_linears = nn.ModuleList(
+        #     [nn.Linear(input_ch_views + W, W//2)] + [nn.Linear(W//2, W//2) for i in range(D//2)])
+        
+        use_viewdirs = True
+        self.use_viewdirs = use_viewdirs
+        if use_viewdirs:
+            self.feature_linear = nn.Linear(self.hidden_dim, self.hidden_dim)
+            self.alpha_linear = nn.Linear(self.hidden_dim, 1)
+            self.rgb_linear = nn.Linear(self.hidden_dim//2, 3)
+        else:
+            self.output_linear = nn.Linear(self.hidden_dim, output_dim)
+
+    def forward(self, x):
+        points, views, timestep = torch.split(
+            x, 
+            [self.input_dim_points, self.input_dim_views, self.input_dim_time], 
+            dim=-1)
+        # input_pts, input_views = torch.split(x, [self.input_ch, self.input_ch_views], dim=-1)
+        h = points
+        for i, l in enumerate(self.linears):
+            h = self.linears[i](h)
+            h = F.relu(h)
+            if i in self.skips:
+                h = torch.cat([points, h], -1)
+
+        if self.use_viewdirs:
+            alpha = self.alpha_linear(h)
+            feature = self.feature_linear(h)
+            h = torch.cat([feature, views], -1)
+        
+            for i, l in enumerate(self.views_linears):
+                h = self.views_linears[i](h)
+                h = F.relu(h)
+
+            rgb = self.rgb_linear(h)
+            outputs = torch.cat([rgb, alpha], -1)
+        else:
+            outputs = self.output_linear(h)
+
+        return outputs   
