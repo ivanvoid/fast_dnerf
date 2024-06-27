@@ -1,5 +1,5 @@
 import os, sys
-from datetime import datetime
+
 import numpy as np
 import imageio
 import json
@@ -13,347 +13,36 @@ from torch.distributions import Categorical
 from tqdm import tqdm, trange
 import pickle
 
-import matplotlib.pyplot as plt
+from torch.utils.tensorboard import SummaryWriter
 
-from run_nerf_helpers import *
-from optimizer import MultiOptimizer
-from radam import RAdam
-from loss import sigma_sparsity_loss, total_variation_loss
-
-from render import *
-from arg_parser_to_config import get_config
-
+### My files
+# DATA
 from data_utils.load_llff import load_llff_data
 from data_utils.load_deepvoxels import load_dv_data
 from data_utils.load_blender import load_blender_data
 from data_utils.load_scannet import load_scannet_data
 from data_utils.load_LINEMOD import load_LINEMOD_data
 
-from torch.utils.tensorboard import SummaryWriter
+# 
+from optimizer import MultiOptimizer
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-torch.manual_seed(2024)
-np.random.seed(2024)
+from loss import sigma_sparsity_loss, total_variation_loss
+from run_nerf_helpers import *
+
+#
+from render import *
+from arg_parser_to_config import get_config
+from create_objects import *
+from run_network import *
+from save_and_load import *
+from logging_setter import set_logging
+
+
 DEBUG = False
 
 
-def batchify(fn, chunk):
-    """Constructs a version of 'fn' that applies to smaller batches.
-    """
-    if chunk is None:
-        return fn
-    def ret(inputs):
-        return torch.cat([fn(inputs[i:i+chunk]) for i in range(0, inputs.shape[0], chunk)], 0)
-    return ret
-
-def stupid_bachify(model, chunk, inputs):
-    result = []
-    for i in range(0, inputs.shape[0], chunk):
-        prediction = model(inputs[i:i+chunk])
-        result += [prediction]
-    result = torch.cat(result, 0)
-    return result
-
-def run_network(inputs, viewdirs, timestep, model, embed_fn, embeddirs_fn, embedtime_fn, netchunk=1024*64):
-    """Prepares inputs and applies network 'fn'.
-    """
-    # Position embedding
-    inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
-    embedded_points, keep_mask = embed_fn(inputs_flat)
-    
-    # Views embedding
-    if viewdirs is not None:
-        input_dirs = viewdirs[:,None].expand(inputs.shape)
-        input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])
-        embedded_dirs = embeddirs_fn(input_dirs_flat)
-
-    # Time embedding
-    assert len(torch.unique(timestep)) == 1, "Only accepts all points from same time"
-    B, N, _ = inputs.shape
-    input_timestep = timestep[:, None].expand([B, N, 1])
-    input_timestep_flat = torch.reshape(input_timestep, [-1, 1])
-    embedded_time = embedtime_fn(input_timestep_flat)
-
-    # Combine embeddings
-    embedded = torch.cat([embedded_points, embedded_dirs, embedded_time], -1)
-
-    # Forward pass
-    # outputs_flat = batchify(fn, netchunk)(embedded)
-    outputs_flat = stupid_bachify(model, netchunk, embedded)
-    outputs_flat[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
-    outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
-    return outputs
-
-
-def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0):
-
-    H, W, focal = hwf
-    near, far = render_kwargs['near'], render_kwargs['far']
-
-    if render_factor!=0:
-        # Render downsampled for speed
-        H = H//render_factor
-        W = W//render_factor
-        focal = focal/render_factor
-
-    rgbs = []
-    depths = []
-    psnrs = []
-    accs = []
-
-    t = time.time()
-    for i, c2w in enumerate(tqdm(render_poses)):
-        # print(i, time.time() - t)
-        t = time.time()
-        rgb, depth, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
-        rgbs.append(rgb.cpu().numpy())
-        # normalize depth to [0,1]
-        depth = (depth - near) / (far - near)
-        depths.append(depth.cpu().numpy())
-
-        accs.append(acc.cpu().numpy())
-        # if i==0:
-        #     print(rgb.shape, depth.shape)
-
-        if gt_imgs is not None and render_factor==0:
-            try:
-                gt_img = gt_imgs[i].cpu().numpy()
-            except:
-                gt_img = gt_imgs[i]
-            p = -10. * np.log10(np.mean(np.square(rgb.cpu().numpy() - gt_img)))
-            # print(p)
-            psnrs.append(p)
-
-        if savedir is not None:
-            # save rgb and depth as a figure
-            fig = plt.figure(figsize=(25,15))
-            ax = fig.add_subplot(1, 2, 1)
-            rgb8 = to8b(rgbs[-1])
-            ax.imshow(rgb8)
-            ax.axis('off')
-            ax = fig.add_subplot(1, 2, 2)
-            ax.imshow(depths[-1], cmap='plasma', vmin=0, vmax=1)
-            ax.axis('off')
-            filename = os.path.join(savedir, '{:03d}.png'.format(i))
-            # save as png
-            plt.savefig(filename, bbox_inches='tight', pad_inches=0)
-            plt.close(fig)
-            # imageio.imwrite(filename, rgb8)
-    
-    rgbs = np.array(rgbs)
-    depths = np.array(depths)
-    psnrs = np.array(psnrs)
-    accs = np.array(accs)
-    return rgbs,depths,psnrs,accs
-
-
-    rgbs = np.stack(rgbs, 0)
-    depths = np.stack(depths, 0)
-    if gt_imgs is not None and render_factor==0:
-        avg_psnr = sum(psnrs)/len(psnrs)
-        print("Avg PSNR over Test set: ", avg_psnr)
-        with open(os.path.join(savedir, "test_psnrs_avg{:0.2f}.pkl".format(avg_psnr)), "wb") as fp:
-            pickle.dump(psnrs, fp)
-
-    return rgbs, depths
-
-def create_embeddings(args):
-    # Hash embedder = 1 
-    embed_fn, input_ch = get_embedder(args.multires, args, i=args.i_embed)
-    # Cos/Sin embedder = 0
-    embedtime_fn, input_ch_time = get_embedder(args.multires, 1, i=0, input_dim=1)
-
-
-    # Get learning parameters for gradients 
-    if args.i_embed==1:
-        # hashed embedding table
-        embedding_params = list(embed_fn.parameters())
-    # print(embedding_params)
-    
-
-    input_ch_views = 0
-    embeddirs_fn = None
-    if args.use_viewdirs:
-        # if using hashed for xyz, use SH for views
-        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args, i=args.i_embed_views)
-
-    output = {
-        'point_fn':embed_fn,
-        'point_dim':input_ch,
-        'time_fn':embedtime_fn,
-        'time_dim':input_ch_time,
-        'views_fn':embeddirs_fn,
-        'views_dim':input_ch_views,
-        'optimization_parameters':embedding_params
-    }
-
-    return output
-
-def create_coarse_model(args, embeddings):
-    coarse_model = 0
-
-    coarse_model = DirectTemporalNeRFSmall(
-            n_layers=2,
-            hidden_dim=64,
-            geo_feat_dim=15,
-            n_layers_color=3,
-            hidden_dim_color=64,
-            input_dim=embeddings['point_dim'], 
-            input_dim_views=embeddings['views_dim'],
-            input_dim_time=embeddings['time_dim'])
-    coarse_model.to(device)    
-
-    return coarse_model
-
-def create_fine_model(args, embeddings):
-    fine_model = 0
-
-    fine_model = DirectTemporalNeRFSmall(
-        n_layers=2,
-        hidden_dim=64,
-        geo_feat_dim=15,
-        n_layers_color=3,
-        hidden_dim_color=64,
-        input_dim=embeddings['point_dim'], 
-        input_dim_views=embeddings['views_dim'],
-        input_dim_time=embeddings['time_dim'])
-    fine_model.to(device)
-
-    return fine_model
-
-def create_optimizer(args, parameters_of_models, parameters_of_embeddings):
-    optimizer = RAdam([
-                        {'params': parameters_of_models, 'weight_decay': 1e-6},
-                        {'params': parameters_of_embeddings, 'eps': 1e-15}
-                    ], lr=args.lrate, betas=(0.9, 0.99))
-    # optimizer = torch.optim.Adam(params=grad_vars, lr=args.lrate, betas=(0.9, 0.999))
-    return optimizer
-
-
-def load_checkpoints(args, coarse_model, fine_model, embeddings, optimizer):
-    start = 0
-    basedir = args.basedir
-    expname = args.expname
-
-    # Load checkpoints
-    if args.ft_path is not None and args.ft_path!='None':
-        ckpts = [args.ft_path]
-    else:
-        ckpts = [os.path.join(basedir, expname, f) for f in sorted(os.listdir(os.path.join(basedir, expname))) if 'tar' in f]
-
-    print('Found ckpts', ckpts)
-    if len(ckpts) > 0 and not args.no_reload:
-        ckpt_path = ckpts[-1]
-        print('Reloading from', ckpt_path)
-        ckpt = torch.load(ckpt_path)
-
-        start = ckpt['global_step']
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-
-        # Load model
-        coarse_model.load_state_dict(ckpt['network_fn_state_dict'])
-        if fine_model is not None:
-            fine_model.load_state_dict(ckpt['network_fine_state_dict'])
-        if args.i_embed==1:
-            embeddings['point_fn'].load_state_dict(ckpt['embed_fn_state_dict'])
-    
-    return start
-
-def create_nerf(args):
-    '''
-    Instantiate NeRF's MLP model.
-    '''
-
-    # Embeddings 
-    embeddings = create_embeddings(args)
-
-    # Coarse model
-    coarse_model = create_coarse_model(args, embeddings)
-    models_parameters = list(coarse_model.parameters())
-
-    # Fine model
-    fine_model = create_fine_model(args, embeddings)
-    models_parameters += list(fine_model.parameters())
-
-    network_query_fn = lambda inputs,viewdirs,timestep,network_fn:run_network(
-        inputs, 
-        viewdirs,
-        timestep, 
-        network_fn,
-        embed_fn=embeddings['point_fn'],
-        embeddirs_fn=embeddings['views_fn'],
-        embedtime_fn=embeddings['time_fn'],
-        netchunk=args.netchunk)
-
-    # Create optimizer
-    optimizer = create_optimizer(args, models_parameters, embeddings['optimization_parameters'])
-
-    # Load checkpoints
-    start = load_checkpoints(args, coarse_model, fine_model, embeddings, optimizer)
-
-    render_kwargs_train = {
-        'network_query_fn' : network_query_fn,
-        'perturb' : args.perturb,
-        'N_importance' : args.N_importance,
-        'network_fine' : fine_model,
-        'N_samples' : args.N_samples,
-        'network_fn' : coarse_model,
-        'embed_fn': embeddings['point_fn'],
-        'use_viewdirs' : args.use_viewdirs,
-        'white_bkgd' : args.white_bkgd,
-        'raw_noise_std' : args.raw_noise_std,
-    }
-
-    render_kwargs_test = {k : render_kwargs_train[k] for k in render_kwargs_train}
-    render_kwargs_test['perturb'] = False
-    render_kwargs_test['raw_noise_std'] = 0.
-
-    return render_kwargs_train, render_kwargs_test, start, models_parameters, optimizer
-
-
-
-
-
-def set_logging(args):
-    # Create log dir and copy the config file
-    basedir = args.basedir
-    
-    if args.i_embed==1:
-        args.expname += "_hashXYZ"
-    elif args.i_embed==0:
-        args.expname += "_posXYZ"
-    if args.i_embed_views==2:
-        args.expname += "_sphereVIEW"
-    elif args.i_embed_views==0:
-        args.expname += "_posVIEW"
-    
-    args.expname += "_fine"+str(args.finest_res) + "_log2T"+str(args.log2_hashmap_size)
-    
-    args.expname += "_lr"+str(args.lrate) + "_decay"+str(args.lrate_decay)
-    
-    args.expname += "_RAdam"
-    
-    if args.sparse_loss_weight > 0:
-        args.expname += "_sparse" + str(args.sparse_loss_weight)
-    args.expname += "_TV" + str(args.tv_loss_weight)
-    args.expname += datetime.now().strftime('_%H_%M_%d_%m_%Y')
-    expname = args.expname
-
-    # Create folders
-    os.makedirs(os.path.join(basedir, expname), exist_ok=True)
-    f = os.path.join(basedir, expname, 'args.txt')
-    with open(f, 'w') as file:
-        for arg in sorted(vars(args)):
-            attr = getattr(args, arg)
-            file.write('{} = {}\n'.format(arg, attr))
-    if args.config is not None:
-        f = os.path.join(basedir, expname, 'config.txt')
-        with open(f, 'w') as file:
-            file.write(open(args.config, 'r').read())
-    return basedir, expname
-
-
 def train():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     args = get_config()
 
@@ -475,7 +164,7 @@ def train():
     basedir, expname = set_logging(args)
 
     # Create nerf model
-    render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args)
+    render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args, device)
     global_step = start
     
     bds_dict = {
@@ -727,7 +416,14 @@ def train():
         global_step += 1
 
 
-if __name__=='__main__':
+def main():
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
+    torch.manual_seed(2024)
+    np.random.seed(2024)
 
     train()
+
+    return
+
+if __name__=='__main__':
+    main()

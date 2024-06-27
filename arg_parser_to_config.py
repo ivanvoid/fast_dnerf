@@ -77,6 +77,7 @@ def config_parser():
                         default=.5, help='fraction of img taken for central crops')
     parser.add_argument('--far_bound', )
 
+    ### ??? ###
     parser.add_argument("--render_only", action='store_true',
                         help='do not optimize, reload weights and render out render_poses path')
     parser.add_argument("--render_test", action='store_true',

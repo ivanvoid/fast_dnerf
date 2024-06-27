@@ -1,6 +1,6 @@
 expname = blender_chair
 basedir = ./logs
-datadir = ../data/lego/
+datadir = data/lego/
 dataset_type = blender
 
 no_batching = True
