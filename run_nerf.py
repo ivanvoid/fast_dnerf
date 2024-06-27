@@ -29,6 +29,17 @@ torch.manual_seed(2024)
 DEBUG = False
 
 
+def stupid_bachify(model, chunk, inputs):
+    """Render rays in smaller minibatches to avoid OOM.
+    But this version is MORE readable. Same as batchify_rays(...)
+    """
+    result = []
+    for i in range(0, inputs.shape[0], chunk):
+        prediction = model(inputs[i:i+chunk])
+        result += [prediction]
+    result = torch.cat(result, 0)
+    return result
+
 def batchify(fn, chunk):
     """Constructs a version of 'fn' that applies to smaller batches.
     """
@@ -39,19 +50,35 @@ def batchify(fn, chunk):
     return ret
 
 
-def run_network(inputs, viewdirs, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
+def run_network(inputs, viewdirs, times, fn, embed_fn, embeddirs_fn, netchunk=1024*64):
     """Prepares inputs and applies network 'fn'.
+    Args:
+        inputs: array of shape [chunk_size, N_samples, 3] 3D coarse points sampled
+        per ray.
+        viewdirs: array of shape [chunk_size, 3] view direction for each ray.
+        times: array of shape [chunk_size, 1] timestep for each ray.
     """
+    # Embedding position
     inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
     embedded, keep_mask = embed_fn(inputs_flat)
 
+    # Embedding viewdirs
     if viewdirs is not None:
         input_dirs = viewdirs[:,None].expand(inputs.shape)
         input_dirs_flat = torch.reshape(input_dirs, [-1, input_dirs.shape[-1]])
         embedded_dirs = embeddirs_fn(input_dirs_flat)
         embedded = torch.cat([embedded, embedded_dirs], -1)
 
-    outputs_flat = batchify(fn, netchunk)(embedded)
+    if times is not None:
+        pass
+        # input_times = times[:,None].expand(inputs.shape)
+        # input_times_flat = torch.reshape(input_times, [-1, input_times.shape[-1]])
+        # embedded_times = embeddirs_fn(input_times_flat)
+        # embedded = torch.cat([embedded, embedded_times], -1)
+    
+    # outputs_flat = batchify(fn, netchunk)(embedded)
+    outputs_flat = stupid_bachify(fn, netchunk,embedded)
+
     outputs_flat[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
     outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
     return outputs
@@ -72,7 +99,7 @@ def batchify_rays(rays_flat, chunk=1024*32, **kwargs):
     return all_ret
 
 
-def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
+def render(H, W, K, chunk=1024*32, rays=None, times=None, c2w=None, ndc=True,
                   near=0., far=1.,
                   use_viewdirs=False, c2w_staticcam=None,
                   **kwargs):
@@ -85,6 +112,7 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
         control maximum memory usage. Does not affect final results.
       rays: array of shape [2, batch_size, 3]. Ray origin and direction for
         each example in batch.
+      times: array of shape [batch_size]. Timestep for each ray in a batch.
       c2w: array of shape [3, 4]. Camera-to-world transformation matrix.
       ndc: bool. If True, represent ray origin, direction in NDC coordinates.
       near: float or array of shape [batch_size]. Nearest distance for a ray.
@@ -123,8 +151,14 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     rays_o = torch.reshape(rays_o, [-1,3]).float()
     rays_d = torch.reshape(rays_d, [-1,3]).float()
 
-    near, far = near * torch.ones_like(rays_d[...,:1]), far * torch.ones_like(rays_d[...,:1])
-    rays = torch.cat([rays_o, rays_d, near, far], -1)
+    near = near * torch.ones_like(rays_d[...,:1])
+    far  =  far * torch.ones_like(rays_d[...,:1])
+    
+    # Time
+    # [batch_size, 1]
+    times = times.reshape(-1,1) * torch.ones_like(rays_d[...,:1])
+    
+    rays = torch.cat([rays_o, rays_d, near, far, times], -1)
     if use_viewdirs:
         rays = torch.cat([rays, viewdirs], -1)
 
@@ -140,7 +174,8 @@ def render(H, W, K, chunk=1024*32, rays=None, c2w=None, ndc=True,
     return ret_list + [ret_dict]
 
 
-def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedir=None, render_factor=0):
+def render_path(render_poses, hwf, K, chunk, render_kwargs, 
+                gt_imgs=None, savedir=None, render_factor=0, render_times=None):
 
     H, W, focal = hwf
     near, far = render_kwargs['near'], render_kwargs['far']
@@ -157,10 +192,15 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs, gt_imgs=None, savedi
     accs = []
 
     t = time.time()
-    for i, c2w in enumerate(tqdm(render_poses)):
+    for i, (c2w, times) in enumerate(tqdm(zip(render_poses, render_times))):
         print(i, time.time() - t)
         t = time.time()
-        rgb, depth, acc, _ = render(H, W, K, chunk=chunk, c2w=c2w[:3,:4], **render_kwargs)
+        rgb, depth, acc, _ = render(
+            H, W, K, 
+            chunk=chunk, 
+            c2w=c2w[:3,:4], 
+            times=times,
+            **render_kwargs)
         rgbs.append(rgb.cpu().numpy())
         # normalize depth to [0,1]
         depth = (depth - near) / (far - near)
@@ -258,10 +298,12 @@ def create_nerf(args):
                           input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
         grad_vars += list(model_fine.parameters())
 
-    network_query_fn = lambda inputs, viewdirs, network_fn : run_network(inputs, viewdirs, network_fn,
-                                                                embed_fn=embed_fn,
-                                                                embeddirs_fn=embeddirs_fn,
-                                                                netchunk=args.netchunk)
+    network_query_fn = lambda inputs, viewdirs, times, network_fn : run_network(
+        inputs, viewdirs, times, 
+        network_fn,
+        embed_fn=embed_fn,
+        embeddirs_fn=embeddirs_fn,
+        netchunk=args.netchunk)
 
     # Create optimizer
     if args.i_embed==1:
@@ -429,9 +471,9 @@ def render_rays(ray_batch,
     """
     N_rays = ray_batch.shape[0]
     rays_o, rays_d = ray_batch[:,0:3], ray_batch[:,3:6] # [N_rays, 3] each
-    viewdirs = ray_batch[:,-3:] if ray_batch.shape[-1] > 8 else None
-    bounds = torch.reshape(ray_batch[...,6:8], [-1,1,2])
-    near, far = bounds[...,0], bounds[...,1] # [-1,1]
+    viewdirs = ray_batch[:,-3:] if ray_batch.shape[-1] > 9 else None
+    bounds = torch.reshape(ray_batch[...,6:9], [-1,1,3])
+    near, far, times = bounds[...,0], bounds[...,1], bounds[...,2] # [-1,1]
 
     t_vals = torch.linspace(0., 1., steps=N_samples)
     if not lindisp:
@@ -459,11 +501,11 @@ def render_rays(ray_batch,
 
     pts = rays_o[...,None,:] + rays_d[...,None,:] * z_vals[...,:,None] # [N_rays, N_samples, 3]
 
-    raw = network_query_fn(pts, viewdirs, network_fn)
+    raw = network_query_fn(pts, viewdirs, times, network_fn)
     rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
     if N_importance > 0:
-
+        # Resampling (N_importance=128) ray  
         rgb_map_0, depth_map_0, acc_map_0, sparsity_loss_0 = rgb_map, depth_map, acc_map, sparsity_loss
 
         z_vals_mid = .5 * (z_vals[...,1:] + z_vals[...,:-1])
@@ -475,7 +517,7 @@ def render_rays(ray_batch,
 
         run_fn = network_fn if network_fine is None else network_fine
 #         raw = run_network(pts, fn=run_fn)
-        raw = network_query_fn(pts, viewdirs, run_fn)
+        raw = network_query_fn(pts, viewdirs, times, run_fn)
 
         rgb_map, disp_map, acc_map, weights, depth_map, sparsity_loss = raw2outputs(raw, z_vals, rays_d, raw_noise_std, white_bkgd, pytest=pytest)
 
@@ -675,6 +717,11 @@ def train():
 
     if args.render_test:
         render_poses = np.array(poses[i_test])
+        render_times = np.array(times[i_test])
+
+    # Move testing data to GPU
+    render_poses = torch.Tensor(render_poses).to(device)
+    render_times = torch.Tensor(render_times).to(device)
 
     # Create log dir and copy the config file
     basedir = args.basedir
@@ -718,9 +765,7 @@ def train():
     render_kwargs_train.update(bds_dict)
     render_kwargs_test.update(bds_dict)
 
-    # Move testing data to GPU
-    render_poses = torch.Tensor(render_poses).to(device)
-
+    
     # Short circuit if only rendering out from trained model
     if args.render_only:
         print('RENDER ONLY')
@@ -736,7 +781,14 @@ def train():
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', render_poses.shape)
 
-            rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
+            rgbs, _ = render_path(
+                render_poses, hwf, K, 
+                args.chunk, 
+                render_kwargs_test, 
+                render_times=render_times,
+                gt_imgs=images, 
+                savedir=testsavedir, 
+                render_factor=args.render_factor)
             print('Done rendering', testsavedir)
             imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
 
@@ -814,12 +866,12 @@ def train():
         # Sample random ray batch
         if use_batching:
             # Random over all images
-            pdb.set_trace()
             batch = rays_rgb[i_batch:i_batch+N_rand] # [B, 2+1, 3*?]
             batch = torch.transpose(batch, 0, 1)
             batch_rays, target_s = batch[:2], batch[2]
             batch_times = times_expand[i_batch:i_batch+N_rand]
-
+            if batch_times is None:
+                pdb.set_trace()
             i_batch += N_rand
             if i_batch >= rays_rgb.shape[0]:
                 print("Shuffle data after an epoch!")
@@ -864,6 +916,7 @@ def train():
             H, W, K, 
             chunk=args.chunk, 
             rays=batch_rays,
+            times=batch_times,
             verbose=i < 10, 
             retraw=True,
             **render_kwargs_train)
@@ -936,7 +989,12 @@ def train():
         if i%args.i_video==0 and i > 0:
             # Turn on testing mode
             with torch.no_grad():
-                rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+                rgbs, disps = render_path(
+                    render_poses, hwf, K, 
+                    args.chunk, 
+                    render_kwargs_test,
+                    render_times=render_times,
+                    )
             print('Done, saving', rgbs.shape, disps.shape)
             moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
@@ -954,7 +1012,14 @@ def train():
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', poses[i_test].shape)
             with torch.no_grad():
-                rgbs, depths, psnrs, accs = render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
+                rgbs, depths, psnrs, accs = render_path(
+                    torch.Tensor(poses[i_test]).to(device), 
+                    hwf, K, 
+                    args.chunk, 
+                    render_kwargs_test, 
+                    render_times=render_times,
+                    gt_imgs=images[i_test], 
+                    savedir=testsavedir)
             print('Saved test set')
 
             _id = 0
