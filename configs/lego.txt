@@ -1,4 +1,4 @@
-expname = blender_chair
+expname = blender_paper_lego
 basedir = ./logs
 datadir = data/lego/
 dataset_type = blender

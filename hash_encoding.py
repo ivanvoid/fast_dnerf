@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 import pdb
 
-from data_utils.utils import get_voxel_vertices
+from utils import get_voxel_vertices
 
 class HashEmbedder(nn.Module):
     def __init__(self, bounding_box, n_levels=16, n_features_per_level=2,\

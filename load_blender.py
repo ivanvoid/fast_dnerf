@@ -6,6 +6,7 @@ import json
 import torch.nn.functional as F
 import cv2
 
+from utils import get_bbox3d_for_blenderobj
 
 trans_t = lambda t : torch.Tensor([
     [1,0,0,0],
@@ -34,7 +35,7 @@ def pose_spherical(theta, phi, radius):
     return c2w
 
 
-def load_LINEMOD_data(basedir, half_res=False, testskip=1):
+def load_blender_data(basedir, half_res=False, testskip=1):
     splits = ['train', 'val', 'test']
     metas = {}
     for s in splits:
@@ -53,10 +54,8 @@ def load_LINEMOD_data(basedir, half_res=False, testskip=1):
         else:
             skip = testskip
             
-        for idx_test, frame in enumerate(meta['frames'][::skip]):
-            fname = frame['file_path']
-            if s == 'test':
-                print(f"{idx_test}th test frame: {fname}")
+        for frame in meta['frames'][::skip]:
+            fname = os.path.join(basedir, frame['file_path'] + '.png')
             imgs.append(imageio.imread(fname))
             poses.append(np.array(frame['transform_matrix']))
         imgs = (np.array(imgs) / 255.).astype(np.float32) # keep all 4 channels (RGBA)
@@ -71,9 +70,8 @@ def load_LINEMOD_data(basedir, half_res=False, testskip=1):
     poses = np.concatenate(all_poses, 0)
     
     H, W = imgs[0].shape[:2]
-    focal = float(meta['frames'][0]['intrinsic_matrix'][0][0])
-    K = meta['frames'][0]['intrinsic_matrix']
-    print(f"Focal: {focal}")
+    camera_angle_x = float(meta['camera_angle_x'])
+    focal = .5 * W / np.tan(.5 * camera_angle_x)
     
     render_poses = torch.stack([pose_spherical(angle, -30.0, 4.0) for angle in np.linspace(-180,180,40+1)[:-1]], 0)
     
@@ -82,14 +80,12 @@ def load_LINEMOD_data(basedir, half_res=False, testskip=1):
         W = W//2
         focal = focal/2.
 
-        imgs_half_res = np.zeros((imgs.shape[0], H, W, 3))
+        imgs_half_res = np.zeros((imgs.shape[0], H, W, 4))
         for i, img in enumerate(imgs):
             imgs_half_res[i] = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA)
         imgs = imgs_half_res
         # imgs = tf.image.resize_area(imgs, [400, 400]).numpy()
 
-    near = np.floor(min(metas['train']['near'], metas['test']['near']))
-    far = np.ceil(max(metas['train']['far'], metas['test']['far']))
-    return imgs, poses, render_poses, [H, W, focal], K, i_split, near, far
-
-
+    bounding_box = get_bbox3d_for_blenderobj(metas["train"], H, W, near=2.0, far=6.0)
+        
+    return imgs, poses, render_poses, [H, W, focal], i_split, bounding_box
