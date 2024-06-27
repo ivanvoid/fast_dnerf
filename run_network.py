@@ -1,7 +1,7 @@
 import os
 import torch
 import time
-import tqdm
+from tqdm import tqdm, trange
 import numpy as np
 import matplotlib.pyplot as plt
 

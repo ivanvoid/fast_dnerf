@@ -15,10 +15,7 @@ def config_parser():
     parser.add_argument("--testskip", type=int, default=8,
                         help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
 
-    # TRAINING SETTINGS
-    parser.add_argument("--expname", type=str,
-                        help='experiment name')
-
+    # MODEL PARAMETERS
     parser.add_argument("--netdepth", type=int, default=8,
                         help='layers in network')
     parser.add_argument("--netwidth", type=int, default=256,
@@ -27,6 +24,11 @@ def config_parser():
                         help='layers in fine network')
     parser.add_argument("--netwidth_fine", type=int, default=256,
                         help='channels per layer in fine network')
+
+    # TRAINING SETTINGS
+    parser.add_argument("--expname", type=str,
+                        help='experiment name')
+
     parser.add_argument("--N_rand", type=int, default=32*32*4,
                         help='batch size (number of random rays per gradient step)')
     parser.add_argument("--lrate", type=float, default=5e-4,

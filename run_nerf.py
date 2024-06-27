@@ -41,12 +41,29 @@ from logging_setter import set_logging
 DEBUG = False
 
 
-def train():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def inference(args):
+    print('RENDER ONLY')
+    # with torch.no_grad():
+    #     if args.render_test:
+    #         # render_test switches to test poses
+    #         images = images[i_test]
+    #     else:
+    #         # Default is smoother render_poses path
+    #         images = None
 
-    args = get_config()
+    #     testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
+    #     os.makedirs(testsavedir, exist_ok=True)
+    #     print('test poses shape', render_poses.shape)
 
-    # Load data
+    #     rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
+    #     print('Done rendering', testsavedir)
+    #     imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
+
+    #     return
+    pass
+
+
+def load_data(args):
     K = None
     if args.dataset_type == 'llff':
         images, poses, bds, render_poses, i_test, bounding_box = load_llff_data(args.datadir, args.factor,
@@ -160,77 +177,103 @@ def train():
     if args.render_test:
         render_poses = np.array(poses[i_test])
 
-    # LOGGING
+
+
+    dataset = {
+        'near':near,
+        'far':far,
+        'H':H,
+        'W':W,
+        'hwf':hwf,
+        'K':K, # intrinsic matrix
+        # extrinsic matrix
+        'i_train':i_train,
+        'i_val':i_val, 
+        'i_test':i_test,
+        'render_poses':render_poses,
+        'render_times':render_times,
+        'poses':poses,
+        'times':times,
+        'images':images,
+    }
+
+    return dataset
+
+
+###
+###
+###
+def train():
+    # DEVICE
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # CONFIG
+    args = get_config()
+
+    # LOAD DATASET
+    ds = load_data(args)
+
+    # LOGGING SETUP
     basedir, expname = set_logging(args)
 
-    # Create nerf model
+    # CREATE NERF MODEL
     render_kwargs_train, render_kwargs_test, start, grad_vars, optimizer = create_nerf(args, device)
     global_step = start
     
+
+    # ???
     bds_dict = {
-        'near' : near,
-        'far' : far,
+        'near' : ds['near'],
+        'far' :  ds['far'],
     }
     render_kwargs_train.update(bds_dict)
     render_kwargs_test.update(bds_dict)
 
     # Move testing data to GPU
-    render_poses = torch.Tensor(render_poses).to(device)
-    render_times = torch.Tensor(render_times).to(device)
+    render_poses = torch.Tensor(ds['render_poses']).to(device)
+    render_times = torch.Tensor(ds['render_times']).to(device)
 
+    
     # Short circuit if only rendering out from trained model
     if args.render_only:
-        print('RENDER ONLY')
-        with torch.no_grad():
-            if args.render_test:
-                # render_test switches to test poses
-                images = images[i_test]
-            else:
-                # Default is smoother render_poses path
-                images = None
-
-            testsavedir = os.path.join(basedir, expname, 'renderonly_{}_{:06d}'.format('test' if args.render_test else 'path', start))
-            os.makedirs(testsavedir, exist_ok=True)
-            print('test poses shape', render_poses.shape)
-
-            rgbs, _ = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test, gt_imgs=images, savedir=testsavedir, render_factor=args.render_factor)
-            print('Done rendering', testsavedir)
-            imageio.mimwrite(os.path.join(testsavedir, 'video.mp4'), to8b(rgbs), fps=30, quality=8)
-
-            return
+        inference()
+        raise NotImplementedError
     
+
     # Prepare raybatch tensor if batching random rays
+    # print('BATCHING: ',args.no_batching)
     N_rand = args.N_rand
     use_batching = not args.no_batching
     if use_batching:
+        raise NotImplementedError
         # For random ray batching
-        print('get rays')
-        rays = np.stack([get_rays_np(H, W, K, p) for p in poses[:,:3,:4]], 0) # [N, ro+rd, H, W, 3]
-        print('done, concats')
-        rays_rgb = np.concatenate([rays, images[:,None]], 1) # [N, ro+rd+rgb, H, W, 3]
-        rays_rgb = np.transpose(rays_rgb, [0,2,3,1,4]) # [N, H, W, ro+rd+rgb, 3]
-        rays_rgb = np.stack([rays_rgb[i] for i in i_train], 0) # train images only
-        rays_rgb = np.reshape(rays_rgb, [-1,3,3]) # [(N-1)*H*W, ro+rd+rgb, 3]
-        rays_rgb = rays_rgb.astype(np.float32)
-        print('shuffle rays')
-        np.random.shuffle(rays_rgb)
+        # print('get rays')
+        # rays = np.stack([get_rays_np(ds['H'], ds['W'], ds['K'], p) for p in ds['poses'][:,:3,:4]], 0) # [N, ro+rd, H, W, 3]
+        # print('done, concats')
+        # rays_rgb = np.concatenate([rays, ds['images'][:,None]], 1) # [N, ro+rd+rgb, H, W, 3]
+        # rays_rgb = np.transpose(rays_rgb, [0,2,3,1,4]) # [N, H, W, ro+rd+rgb, 3]
+        # rays_rgb = np.stack([rays_rgb[i] for i in ds['i_train']], 0) # train images only
+        # rays_rgb = np.reshape(rays_rgb, [-1,3,3]) # [(N-1)*H*W, ro+rd+rgb, 3]
+        # rays_rgb = rays_rgb.astype(np.float32)
+        # print('shuffle rays')
+        # np.random.shuffle(rays_rgb)
 
-        print('done')
-        i_batch = 0
+        # print('done')
+        # i_batch = 0
 
     # Move training data to GPU
     if use_batching:
-        images = torch.Tensor(images).to(device)
+        ds['images'] = torch.Tensor(ds['images']).to(device)
     if use_batching:
         rays_rgb = torch.Tensor(rays_rgb).to(device)
-    poses = torch.Tensor(poses).to(device)
-    times = torch.Tensor(times).to(device)
+    poses = torch.Tensor(ds['poses']).to(device)
+    times = torch.Tensor(ds['times']).to(device)
 
     N_iters = 50000 + 1
     print('Begin')
-    print('TRAIN views are', i_train)
-    print('TEST views are', i_test)
-    print('VAL views are', i_val)
+    print('TRAIN views are', ds['i_train'])
+    print('TEST views are', ds['i_test'])
+    print('VAL views are', ds['i_val'])
 
     # Summary writers
     writer = SummaryWriter(os.path.join(basedir, 'summaries', expname))
@@ -258,28 +301,30 @@ def train():
 
         else:
             # Random from one image
-            img_i = np.random.choice(i_train)
-            target = images[img_i]
+            img_i = np.random.choice(ds['i_train'])
+            target = ds['images'][img_i]
             target = torch.Tensor(target).to(device)
             pose = poses[img_i, :3,:4]
             timestep = times[img_i]
 
             if N_rand is not None:
                 # (H, W, 3), (H, W, 3)
-                rays_o, rays_d = get_rays(H, W, K, torch.Tensor(pose))  
+                rays_o, rays_d = get_rays(ds['H'], ds['W'], ds['K'], torch.Tensor(pose))  
 
                 if i < args.precrop_iters:
-                    dH = int(H//2 * args.precrop_frac)
-                    dW = int(W//2 * args.precrop_frac)
+                    dH = int(ds['H']//2 * args.precrop_frac)
+                    dW = int(ds['W']//2 * args.precrop_frac)
                     coords = torch.stack(
                         torch.meshgrid(
-                            torch.linspace(H//2 - dH, H//2 + dH - 1, 2*dH),
-                            torch.linspace(W//2 - dW, W//2 + dW - 1, 2*dW)
+                            torch.linspace(ds['H']//2 - dH, ds['H']//2 + dH - 1, 2*dH),
+                            torch.linspace(ds['W']//2 - dW, ds['W']//2 + dW - 1, 2*dW)
                         ), -1)
                     if i == start:
                         print(f"[Config] Center cropping of size {2*dH} x {2*dW} is enabled until iter {args.precrop_iters}")
                 else:
-                    coords = torch.stack(torch.meshgrid(torch.linspace(0, H-1, H), torch.linspace(0, W-1, W)), -1)  # (H, W, 2)
+                    coords = torch.stack(torch.meshgrid(
+                        torch.linspace(0, ds['H']-1, ds['H']), 
+                        torch.linspace(0, ds['W']-1, ds['W'])), -1)  # (H, W, 2)
 
                 coords = torch.reshape(coords, [-1,2])  # (H * W, 2)
                 select_inds = np.random.choice(coords.shape[0], size=[N_rand], replace=False)  # (N_rand,)
@@ -292,7 +337,7 @@ def train():
         #####  Core optimization loop  #####
         
         rgb, depth, acc, extras = render(
-            H, W, K, 
+            ds['H'], ds['W'], ds['K'], 
             timestep=timestep,
             chunk=args.chunk, 
             rays=batch_rays,
@@ -367,7 +412,7 @@ def train():
         if i%args.i_video==0 and i > 0:
             # Turn on testing mode
             with torch.no_grad():
-                rgbs, disps = render_path(render_poses, hwf, K, args.chunk, render_kwargs_test)
+                rgbs, disps = render_path(render_poses, ds['hwf'], ds['K'], args.chunk, render_kwargs_test)
             print('Done, saving', rgbs.shape, disps.shape)
             moviebase = os.path.join(basedir, expname, '{}_spiral_{:06d}_'.format(expname, i))
             imageio.mimwrite(moviebase + 'rgb.mp4', to8b(rgbs), fps=30, quality=8)
@@ -383,11 +428,18 @@ def train():
         if i%args.i_testset==0 and i > 0:
             testsavedir = os.path.join(basedir, expname, 'testset_{:06d}'.format(i))
             os.makedirs(testsavedir, exist_ok=True)
-            print('test poses shape', poses[i_test].shape)
+            print('test poses shape', poses[ds['i_test']].shape)
             with torch.no_grad():
-                rgbs,depths,psnrs,accs = render_path(torch.Tensor(poses[i_test]).to(device), hwf, K, args.chunk, render_kwargs_test, gt_imgs=images[i_test], savedir=testsavedir)
+                rgbs, depths, psnrs, accs = render_path(
+                    torch.Tensor(poses[ds['i_test']]).to(device), 
+                    ds['hwf'], 
+                    ds['K'], 
+                    args.chunk, 
+                    render_kwargs_test, 
+                    gt_imgs=ds['images'][ds['i_test']], 
+                    savedir=testsavedir)
             
-            writer.add_image('gt', to8b(images[i_test][0]), i, dataformats='HWC')
+            writer.add_image('gt', to8b(ds['images'][ds['i_test']][0]), i, dataformats='HWC')
             writer.add_image('rgb', to8b(rgbs[0]), i, dataformats='HWC')
             writer.add_image('depth', depths[0], i, dataformats='HW')
             writer.add_image('acc', accs[0], i, dataformats='HW')

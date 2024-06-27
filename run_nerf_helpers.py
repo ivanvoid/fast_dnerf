@@ -242,8 +242,6 @@ class NeRFSmall(nn.Module):
 
 
 
-
-
 ### Hash tempootal NERF
 class DirectTemporalNeRFSmall(nn.Module):
     def __init__(
