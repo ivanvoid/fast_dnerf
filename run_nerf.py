@@ -633,14 +633,21 @@ def train():
     parser = config_parser()
     args = parser.parse_args()
 
+    print(args)
+    
     # Load data
     K = None
 
     if args.dataset_type == 'blender':
-        images, poses, render_poses, hwf, i_split, bounding_box = load_blender_data(args.datadir, args.half_res, args.testskip)
+        images, poses, render_poses, hwf, i_split, bounding_box, render_times, times = load_blender_data(args.datadir, args.half_res, args.testskip)
         args.bounding_box = bounding_box
         print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
         i_train, i_val, i_test = i_split
+
+        # Data time check
+        min_time, max_time = times[i_train[0]], times[i_train[-1]]
+        assert min_time == 0., "time must start at 0"
+        assert max_time == 1., "max time must be 1"
 
         near = 2.
         far = 6.
@@ -686,6 +693,7 @@ def train():
         args.expname += "_sparse" + str(args.sparse_loss_weight)
     args.expname += "_TV" + str(args.tv_loss_weight)
     #args.expname += datetime.now().strftime('_%H_%M_%d_%m_%Y')
+    args.expname += str(datetime.now())
     expname = args.expname
 
     os.makedirs(os.path.join(basedir, expname), exist_ok=True)
@@ -739,13 +747,23 @@ def train():
     use_batching = not args.no_batching
     if use_batching:
         # For random ray batching
+        pdb.set_trace()
         print('get rays')
-        rays = np.stack([get_rays_np(H, W, K, p) for p in poses[:,:3,:4]], 0) # [N, ro+rd, H, W, 3]
+         # [N, ro+rd, H, W, 3]
+        rays = np.stack([get_rays_np(H, W, K, p) for p in poses[:,:3,:4]], 0)
         print('done, concats')
-        rays_rgb = np.concatenate([rays, images[:,None]], 1) # [N, ro+rd+rgb, H, W, 3]
-        rays_rgb = np.transpose(rays_rgb, [0,2,3,1,4]) # [N, H, W, ro+rd+rgb, 3]
-        rays_rgb = np.stack([rays_rgb[i] for i in i_train], 0) # train images only
-        rays_rgb = np.reshape(rays_rgb, [-1,3,3]) # [(N-1)*H*W, ro+rd+rgb, 3]
+
+        # [N, ro+rd+rgb, H, W, 3]
+        rays_rgb = np.concatenate([rays, images[:,None]], 1) 
+        
+        # [N, H, W, ro+rd+rgb, 3]
+        rays_rgb = np.transpose(rays_rgb, [0,2,3,1,4]) 
+
+        # train images only
+        rays_rgb = np.stack([rays_rgb[i] for i in i_train], 0) 
+        
+        # [(N-1)*H*W, ro+rd+rgb, 3]
+        rays_rgb = np.reshape(rays_rgb, [-1,3,3]) 
         rays_rgb = rays_rgb.astype(np.float32)
         print('shuffle rays')
         np.random.shuffle(rays_rgb)
@@ -759,6 +777,7 @@ def train():
     poses = torch.Tensor(poses).to(device)
     if use_batching:
         rays_rgb = torch.Tensor(rays_rgb).to(device)
+    times = torch.Tensor(times).to(device)
 
 
     N_iters = args.n_iters + 1
@@ -797,6 +816,7 @@ def train():
             target = images[img_i]
             target = torch.Tensor(target).to(device)
             pose = poses[img_i, :3,:4]
+            timestep = times[img_i]
 
             if N_rand is not None:
                 rays_o, rays_d = get_rays(H, W, K, torch.Tensor(pose))  # (H, W, 3), (H, W, 3)
@@ -917,7 +937,11 @@ def train():
             print('Saved test set')
 
             _id = 0
-            writer.add_image('gt', to8b(images[i_test][_id]), i, dataformats='HWC')
+            try:
+                _img = np.array(images[i_test][_id].cpu())
+            except:
+                _img = images[i_test][_id]
+            writer.add_image('gt', to8b(_img), i, dataformats='HWC')
             writer.add_image('rgb', to8b(rgbs[_id]), i, dataformats='HWC')
             writer.add_image('depth', depths[_id], i, dataformats='HW')
             writer.add_image('acc', accs[_id], i, dataformats='HW')
