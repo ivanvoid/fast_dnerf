@@ -23,5 +23,6 @@ i_testset = 500
 n_iters = 1500 
 chunk = 16384 
 netchunk = 32768
-no_reload = True
+no_reload = False
 no_batching = False
+ft_path = logs/blender_paper_lego_hashXYZ_sphereVIEW_fine512_log2T19_lr0.01_decay10_RAdam_sparse1e-10_TV1e-062024-06-27 17:21:53.752961/001500.tar

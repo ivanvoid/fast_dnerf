@@ -10,6 +10,8 @@ def config_parser():
     parser.add_argument("--datadir", type=str, default='./data/llff/fern',
                         help='input data directory')
 
+    # MODEL OPTIONS
+
     # training options
     parser.add_argument("--netdepth", type=int, default=8,
                         help='layers in network')

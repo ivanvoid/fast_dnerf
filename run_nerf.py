@@ -236,13 +236,13 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs,
             # imageio.imwrite(filename, rgb8)
 
 
-    # rgbs = np.stack(rgbs, 0)
-    # depths = np.stack(depths, 0)
-    # if gt_imgs is not None and render_factor==0:
-    #     avg_psnr = sum(psnrs)/len(psnrs)
-    #     print("Avg PSNR over Test set: ", avg_psnr)
-    #     with open(os.path.join(savedir, "test_psnrs_avg{:0.2f}.pkl".format(avg_psnr)), "wb") as fp:
-    #         pickle.dump(psnrs, fp)
+    rgbs = np.stack(rgbs, 0)
+    depths = np.stack(depths, 0)
+    if gt_imgs is not None and render_factor==0:
+        avg_psnr = sum(psnrs)/len(psnrs)
+        print("Avg PSNR over Test set: ", avg_psnr)
+        with open(os.path.join(savedir, "test_psnrs_avg{:0.2f}.pkl".format(avg_psnr)), "wb") as fp:
+            pickle.dump(psnrs, fp)
 
     rgbs = np.array(rgbs)
     depths = np.array(depths)
@@ -666,7 +666,8 @@ def train():
             os.makedirs(testsavedir, exist_ok=True)
             print('test poses shape', render_poses.shape)
 
-            rgbs, _ = render_path(
+            print('args.render_factor: ',args.render_factor)
+            rgbs, depths, psnrs, accs = render_path(
                 render_poses, hwf, K, 
                 args.chunk, 
                 render_kwargs_test, 
