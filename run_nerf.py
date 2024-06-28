@@ -279,7 +279,7 @@ def create_nerf(args):
         args.multires_views, args, i=args.i_embed_views, input_dim=1)
 
     # Mid embedding function. For D-NeRF, predictions embedding
-    embed_mid_fn, embed_ch_mid = get_embedder(args.multires_views, args, i=0)
+    embed_mid_fn, embed_ch_mid = get_embedder(args.multires_timenet, args, i=0)
 
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]

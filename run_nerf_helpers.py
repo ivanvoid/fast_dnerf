@@ -417,7 +417,9 @@ class DNeRFSmall(nn.Module):
         input_pts_orig = input_pts[:, :3]
     
         points = self.embed_mid_fn(dx + input_pts_orig)
-
+        if isinstance(points, tuple): # hash ebmedding check
+            points = points[0]
+        
         nerf_input = torch.cat([points, input_views], dim=-1)
         outputs = self.nerf(nerf_input)
 

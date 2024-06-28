@@ -52,6 +52,8 @@ def config_parser():
                         help='finest resolultion for hashed embedding')
     parser.add_argument("--log2_hashmap_size",   type=int, default=19,
                         help='log2 of hashmap size')
+    parser.add_argument("--multires_timenet", type=int, default=10,
+                        help='log2 of max freq for positional encoding (3D location) in a TimeNet')
 
 
     ### TRAINING OPTIONS
@@ -60,7 +62,7 @@ def config_parser():
     parser.add_argument("--lrate_decay", type=int, default=250,
                         help='exponential learning rate decay (in 1000 steps)')
     
-    parser.add_argument("--N_rand", type=int, default=32*32*4,
+    parser.add_argument("--N_rand", type=int, default=2000, #32*32*4,
                         help='batch size (number of random rays per gradient step)')
     parser.add_argument("--chunk", type=int, default=1024*32,
                         help='number of rays processed in parallel, decrease if running out of memory')

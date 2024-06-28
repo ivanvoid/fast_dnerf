@@ -33,6 +33,11 @@ python camera_pose_visualizer.py
 ## Nodes
 - Ray batching with timesteps
 
+make a gif:
+```
+convert -delay 10 -loop 0 *.png ani.gif
+```
+
 ## Acknowledgement
 This repo based on works of:
 
