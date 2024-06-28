@@ -1,5 +1,8 @@
 # Fast-Dynamic-NeRF
 
+![Dynamic NeRF Prediction](/_graphics/Predictions.gif)
+
+
 ## Setup
 ```
 conda env create -f environment.yml
