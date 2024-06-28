@@ -641,7 +641,7 @@ def train():
         args.expname += "_sparse" + str(args.sparse_loss_weight)
     args.expname += "_TV" + str(args.tv_loss_weight)
     #args.expname += datetime.now().strftime('_%H_%M_%d_%m_%Y')
-    args.expname += str(datetime.now())
+    args.expname += ' ' + str(datetime.now())
     expname = args.expname
 
     os.makedirs(os.path.join(basedir, expname), exist_ok=True)
@@ -960,3 +960,5 @@ if __name__=='__main__':
     torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
     train()
+
+
