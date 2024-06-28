@@ -11,6 +11,7 @@ conda env create -f environment.yml
 ## Data
 [Dynamic NeRF dataset](https://drive.google.com/file/d/1uHVyApwqugXTFuIRRlE4abTW8_rrVeIK/view)
 
+Put data in `fast_dnerf/data/`
 
 ## Run
 Train:
@@ -22,6 +23,15 @@ Inference:
 ```
 . inference.sh
 ```
+
+## Misc
+To visualize cameras:
+```
+python camera_pose_visualizer.py
+```
+
+## Nodes
+- Ray batching with timesteps
 
 ## Acknowledgement
 This repo based on works of:

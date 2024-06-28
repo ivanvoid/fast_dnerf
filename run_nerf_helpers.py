@@ -335,6 +335,7 @@ class NeRFSmall(nn.Module):
 # Small NeRF for Hash embeddings
 class DNeRFSmall(nn.Module):
     def __init__(self,
+                 # NeRF
                  num_layers=3,
                  hidden_dim=64,
                  geo_feat_dim=15,
@@ -343,11 +344,27 @@ class DNeRFSmall(nn.Module):
                  input_ch=3, 
                  input_ch_views=3,
                  input_ch_times=1,
-                 embed_mid_fn=None, 
+                 embed_mid_fn=None,
+                 # TimeNet
+                 n_layers_time=2,
+                 n_width_time=64,
                  embed_ch_mid=None,
                  skips=[4]
                  ):
+        """
+        Rough Pipeline:
+           X   ->   enc(X)    -> TimeNet(enc(X))=Y ->   midenc(Y)     -> NeRF
+        [bs,3]   [bs,enc_dim]        [bs,3]           [bs,midenc_dim]
+        """
         super(DNeRFSmall, self).__init__()
+
+        # NeRF Values
+        self.input_ch = input_ch
+        self.input_ch_views = input_ch_views
+        self.input_ch_times = input_ch_times
+        self.num_layers = num_layers
+        self.hidden_dim = hidden_dim
+        self.geo_feat_dim = geo_feat_dim
 
         self.nerf = NeRFSmall(
                  num_layers=num_layers,
@@ -358,28 +375,25 @@ class DNeRFSmall(nn.Module):
                  input_ch=embed_ch_mid, 
                  input_ch_views=input_ch_views)
         
+        # Timenet
+        self.n_layers_time = n_layers_time
+        self.n_width_time = n_width_time
+        assert n_layers_time not in skips, "Change skips or n_layers for TimeNet, n_layers_time shoud't be in skips!"
         self.skips = skips
-        self.input_ch = input_ch
-        self.input_ch_views = input_ch_views
-        self.input_ch_times = input_ch_times
-        self.num_layers = num_layers
-        self.hidden_dim = hidden_dim
-        self.geo_feat_dim = geo_feat_dim
-
         self.embed_mid_fn = embed_mid_fn 
         self.embed_ch_mid = embed_ch_mid
 
         self.timenet = self.create_time_net()
 
     def create_time_net(self):
-        layers = [nn.Linear(self.input_ch+self.input_ch_times, self.hidden_dim)]
-        for i in range(self.num_layers - 1):
-            in_channels = self.hidden_dim
+        layers = [nn.Linear(self.input_ch+self.input_ch_times, self.n_width_time)]
+        for i in range(self.n_layers_time - 1):
+            in_channels = self.n_width_time
             if i in self.skips:
                 in_channels += self.input_ch
 
-            layers += [nn.Linear(in_channels, self.hidden_dim)]
-        layers += [nn.Linear(self.hidden_dim, 3)]
+            layers += [nn.Linear(in_channels, self.n_width_time)]
+        layers += [nn.Linear(self.n_width_time, 3)]
         return nn.ModuleList(layers)
 
     def query_time(self, points, timesteps):
@@ -401,6 +415,7 @@ class DNeRFSmall(nn.Module):
         
         dx = self.query_time(input_pts, input_times)
         input_pts_orig = input_pts[:, :3]
+    
         points = self.embed_mid_fn(dx + input_pts_orig)
 
         nerf_input = torch.cat([points, input_views], dim=-1)

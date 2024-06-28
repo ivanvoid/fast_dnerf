@@ -1,42 +1,79 @@
 def config_parser():
     import configargparse
     parser = configargparse.ArgumentParser()
+
+    ### META
     parser.add_argument('--config', is_config_file=True,
                         help='config file path')
     parser.add_argument("--expname", type=str,
                         help='experiment name')
-    parser.add_argument("--basedir", type=str, default='./logs/',
-                        help='where to store ckpts and logs')
-    parser.add_argument("--datadir", type=str, default='./data/llff/fern',
-                        help='input data directory')
-
-    # MODEL OPTIONS
-
-    # training options
-    parser.add_argument("--netdepth", type=int, default=8,
+    
+    ### MODEL OPTIONS
+    ## COARSE NETWORK PARAMETERS
+    parser.add_argument("--n_layers", type=int, default=2, #default=8,
                         help='layers in network')
-    parser.add_argument("--netwidth", type=int, default=256,
+    parser.add_argument("--n_width", type=int, default=64, #default=256,
                         help='channels per layer')
-    parser.add_argument("--netdepth_fine", type=int, default=8,
+    parser.add_argument("--n_geo_feat", type=int, default=15,
+                        help='features for color')
+    parser.add_argument("--n_layers_color", type=int, default=3,
+                        help='layers in color subnetwork')
+    parser.add_argument("--n_width_color", type=int, default=64,
+                        help='channels per layer in color subnetwork')
+    
+    ## FINE NETWORK PARAMETERS
+    parser.add_argument("--n_layers_fine", type=int, default=2, #default=8,
                         help='layers in fine network')
-    parser.add_argument("--netwidth_fine", type=int, default=256,
+    parser.add_argument("--n_width_fine", type=int, default=64, #default=256,
                         help='channels per layer in fine network')
-    parser.add_argument("--N_rand", type=int, default=32*32*4,
-                        help='batch size (number of random rays per gradient step)')
+    parser.add_argument("--n_geo_feat_fine", type=int, default=15,
+                        help='features for color')
+    parser.add_argument("--n_layers_color_fine", type=int, default=3,
+                        help='layers in color subnetwork')
+    parser.add_argument("--n_width_color_fine", type=int, default=64,
+                        help='channels per layer in color subnetwork')
+
+    ## TIME NETWORK PARAMETERS
+    parser.add_argument("--n_layers_time", type=int, default=2, #default=8,
+                        help='layers in fine network')
+    parser.add_argument("--n_width_time", type=int, default=64, #default=256,
+                        help='channels per layer in fine network')
+    parser.add_argument("--skips_time", type=str, default='4', 
+                        help='Skip connections, write string ints without spaces')
+
+    # ENCODDINGS PARAMETERS
+    parser.add_argument("--i_embed", type=int, default=1,
+                        help='0:default(sincos) positional encoding; 1:hashed embedding;  2:spherical')
+    parser.add_argument("--multires", type=int, default=10,
+                        help='log2 of max freq for positional encoding (3D location)')
+    parser.add_argument("--multires_views", type=int, default=4,
+                        help='log2 of max freq for positional encoding (2D direction)')
+    parser.add_argument("--finest_res",   type=int, default=512,
+                        help='finest resolultion for hashed embedding')
+    parser.add_argument("--log2_hashmap_size",   type=int, default=19,
+                        help='log2 of hashmap size')
+
+
+    ### TRAINING OPTIONS
     parser.add_argument("--lrate", type=float, default=5e-4,
                         help='learning rate')
     parser.add_argument("--lrate_decay", type=int, default=250,
                         help='exponential learning rate decay (in 1000 steps)')
+    
+    parser.add_argument("--N_rand", type=int, default=32*32*4,
+                        help='batch size (number of random rays per gradient step)')
     parser.add_argument("--chunk", type=int, default=1024*32,
                         help='number of rays processed in parallel, decrease if running out of memory')
     parser.add_argument("--netchunk", type=int, default=1024*64,
                         help='number of pts sent through network in parallel, decrease if running out of memory')
     parser.add_argument("--no_batching", action='store_true',
-                        help='only take random rays from 1 image at a time')
+                        help='If true: only take random rays from 1 image at a time')
+    
     parser.add_argument("--no_reload", action='store_true',
                         help='do not reload weights from saved ckpt')
     parser.add_argument("--ft_path", type=str, default=None,
                         help='specific weights npy file to reload for coarse network')
+
 
     # rendering options
     parser.add_argument("--N_samples", type=int, default=64,
@@ -47,14 +84,8 @@ def config_parser():
                         help='set to 0. for no jitter, 1. for jitter')
     parser.add_argument("--use_viewdirs", action='store_true',
                         help='use full 5D input instead of 3D')
-    parser.add_argument("--i_embed", type=int, default=1,
-                        help='set 1 for hashed embedding, 0 for default positional encoding, 2 for spherical')
     parser.add_argument("--i_embed_views", type=int, default=2,
                         help='set 1 for hashed embedding, 0 for default positional encoding, 2 for spherical')
-    parser.add_argument("--multires", type=int, default=10,
-                        help='log2 of max freq for positional encoding (3D location)')
-    parser.add_argument("--multires_views", type=int, default=4,
-                        help='log2 of max freq for positional encoding (2D direction)')
     parser.add_argument("--raw_noise_std", type=float, default=0.,
                         help='std dev of noise added to regularize sigma_a output, 1e0 recommended')
 
@@ -72,11 +103,15 @@ def config_parser():
                         default=.5, help='fraction of img taken for central crops')
     parser.add_argument("--n_iters", type=int,
                         default=50000, help='Number of training iterations')
-    
+
+    parser.add_argument("--sparse-loss-weight", type=float, default=1e-10,
+                        help='learning rate')
+    parser.add_argument("--tv-loss-weight", type=float, default=1e-6,
+                        help='learning rate')
 
 
     # dataset options
-    parser.add_argument("--dataset_type", type=str, default='llff',
+    parser.add_argument("--dataset_type", type=str, default='blender',
                         help='options: llff / blender / deepvoxels')
     parser.add_argument("--testskip", type=int, default=8,
                         help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
@@ -108,6 +143,11 @@ def config_parser():
                         help='will take every 1/N images as LLFF test set, paper uses 8')
 
     # logging/saving options
+    parser.add_argument("--basedir", type=str, default='./logs/',
+                        help='where to store ckpts and logs')
+    parser.add_argument("--datadir", type=str, default='./data/llff/fern',
+                        help='input data directory')
+    
     parser.add_argument("--i_print",   type=int, default=100,
                         help='frequency of console printout and metric loggin')
     parser.add_argument("--i_img",     type=int, default=500,
@@ -118,15 +158,6 @@ def config_parser():
                         help='frequency of testset saving')
     parser.add_argument("--i_video",   type=int, default=5000,
                         help='frequency of render_poses video saving')
-
-    parser.add_argument("--finest_res",   type=int, default=512,
-                        help='finest resolultion for hashed embedding')
-    parser.add_argument("--log2_hashmap_size",   type=int, default=19,
-                        help='log2 of hashmap size')
-    parser.add_argument("--sparse-loss-weight", type=float, default=1e-10,
-                        help='learning rate')
-    parser.add_argument("--tv-loss-weight", type=float, default=1e-6,
-                        help='learning rate')
 
     return parser
 

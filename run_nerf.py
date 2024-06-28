@@ -61,7 +61,11 @@ def run_network(inputs, viewdirs, times, fn,
     """
     # Embedding position
     inputs_flat = torch.reshape(inputs, [-1, inputs.shape[-1]])
-    embedded, keep_mask = embed_fn(inputs_flat)
+    
+    embedded_out = embed_fn(inputs_flat)
+    embedded = embedded_out
+    if isinstance(embedded_out, tuple): # check for hash encoding
+        embedded, keep_mask = embedded_out
 
     # Embedding viewdirs
     if viewdirs is not None:
@@ -79,7 +83,8 @@ def run_network(inputs, viewdirs, times, fn,
     # outputs_flat = batchify(fn, netchunk)(embedded)
     outputs_flat = stupid_bachify(fn, netchunk,embedded)
 
-    outputs_flat[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
+    if isinstance(embedded_out, tuple): # check for hash encoding
+        outputs_flat[~keep_mask, -1] = 0 # set sigma to 0 for invalid points
     outputs = torch.reshape(outputs_flat, list(inputs.shape[:-1]) + [outputs_flat.shape[-1]])
     return outputs
 
@@ -255,7 +260,10 @@ def render_path(render_poses, hwf, K, chunk, render_kwargs,
 def create_nerf(args):
     """Instantiate NeRF's MLP model.
     """
+    
     embed_fn, input_ch = get_embedder(args.multires, args, i=args.i_embed)
+    # If hash then get parameters for optimization
+    embedding_params=[]
     if args.i_embed==1:
         # hashed embedding table
         embedding_params = list(embed_fn.parameters())
@@ -276,43 +284,51 @@ def create_nerf(args):
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
 
-    if args.i_embed==1:
-        model = DNeRFSmall(num_layers=2,
-                        hidden_dim=64,
-                        geo_feat_dim=15,
-                        num_layers_color=3,
-                        hidden_dim_color=64,
-                        input_ch=input_ch, 
-                        input_ch_views=input_ch_views,
-                        input_ch_times=input_ch_times,
-                        embed_mid_fn=embed_mid_fn, 
-                        embed_ch_mid=embed_ch_mid
-                        ).to(device)
-    else:
-        model = NeRF(D=args.netdepth, W=args.netwidth,
-                 input_ch=input_ch, output_ch=output_ch, skips=skips,
-                 input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+    # if args.i_embed==1:
+    model = DNeRFSmall(
+                    input_ch=input_ch, 
+                    num_layers=args.n_layers,
+                    hidden_dim=args.n_width,
+                    geo_feat_dim=args.n_geo_feat,
+                    num_layers_color=args.n_layers_color,
+                    hidden_dim_color=args.n_width_color_fine,
+                    input_ch_views=input_ch_views,
+                    input_ch_times=input_ch_times,
+                    embed_mid_fn=embed_mid_fn, 
+                    embed_ch_mid=embed_ch_mid,
+                    n_layers_time=args.n_layers_time,
+                    n_width_time=args.n_width_time,
+                    skips=[int(x) for x in args.skips_time.split(',')],
+                    ).to(device)
+    # else:
+    #     model = NeRF(D=args.n_layers, W=args.n_width,
+    #              input_ch=input_ch, output_ch=output_ch, skips=skips,
+    #              input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
     grad_vars = list(model.parameters())
 
     model_fine = None
 
     if args.N_importance > 0:
-        if args.i_embed==1:
-            model_fine = DNeRFSmall(num_layers=2,
-                        hidden_dim=64,
-                        geo_feat_dim=15,
-                        num_layers_color=3,
-                        hidden_dim_color=64,
-                        input_ch=input_ch, 
-                        input_ch_views=input_ch_views,
-                        input_ch_times=input_ch_times,
-                        embed_mid_fn=embed_mid_fn, 
-                        embed_ch_mid=embed_ch_mid
-                        ).to(device)
-        else:
-            model_fine = NeRF(D=args.netdepth_fine, W=args.netwidth_fine,
-                          input_ch=input_ch, output_ch=output_ch, skips=skips,
-                          input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
+        # if args.i_embed==1:
+        model_fine = DNeRFSmall(
+                    input_ch=input_ch, 
+                    num_layers=args.n_layers_fine,
+                    hidden_dim=args.n_width_fine,
+                    geo_feat_dim=args.n_geo_feat_fine,
+                    num_layers_color=args.n_layers_color_fine,
+                    hidden_dim_color=args.n_width_color_fine,
+                    input_ch_views=input_ch_views,
+                    input_ch_times=input_ch_times,
+                    embed_mid_fn=embed_mid_fn, 
+                    embed_ch_mid=embed_ch_mid,
+                    n_layers_time=args.n_layers_time,
+                    n_width_time=args.n_width_time,
+                    skips=[int(x) for x in args.skips_time.split(',')],
+                    ).to(device)
+        # else:
+        #     model_fine = NeRF(D=args.n_layers_fine, W=args.n_width_fine,
+        #                   input_ch=input_ch, output_ch=output_ch, skips=skips,
+        #                   input_ch_views=input_ch_views, use_viewdirs=args.use_viewdirs).to(device)
         grad_vars += list(model_fine.parameters())
 
     network_query_fn = lambda inputs, viewdirs, times, network_fn : run_network(
