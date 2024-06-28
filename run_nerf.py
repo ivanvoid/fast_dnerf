@@ -947,7 +947,8 @@ def train():
                 "psnr": psnr_list,
                 "time": time_list
             }
-            with open(os.path.join(basedir, expname, "loss_vs_time.pkl"), "wb") as fp:
+            log_path = os.path.join(basedir, expname, "loss_vs_time.pkl")
+            with open(log_path, "wb") as fp:
                 pickle.dump(loss_psnr_time, fp)
 
             writer.add_scalar('Loss', loss.item(), i)

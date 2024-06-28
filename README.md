@@ -30,7 +30,7 @@ To visualize cameras:
 python camera_pose_visualizer.py
 ```
 
-## Nodes
+## Notes
 - Ray batching with timesteps
 
 make a gif:

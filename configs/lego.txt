@@ -30,3 +30,5 @@ finest_res=512
 no_reload = True
 ft_path = None
 
+i_print=20
+
