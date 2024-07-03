@@ -272,14 +272,15 @@ def create_nerf(args):
     embeddirs_fn = None
     if args.use_viewdirs:
         # if using hashed for xyz, use SH for views
-        embeddirs_fn, input_ch_views = get_embedder(args.multires_views, args, i=args.i_embed_views)
+        embeddirs_fn, input_ch_views = get_embedder(
+            args.multires_views, args, i=args.i_embed_views)
 
     # Time
     embed_times_fn, input_ch_times = get_embedder(
         args.multires_views, args, i=args.i_embed_views, input_dim=1)
 
     # Mid embedding function. For D-NeRF, predictions embedding
-    embed_mid_fn, embed_ch_mid = get_embedder(args.multires_timenet, args, i=0)
+    embed_mid_fn, embed_ch_mid = get_embedder(args.multires_timenet, args, i=2)
 
     output_ch = 5 if args.N_importance > 0 else 4
     skips = [4]
@@ -298,7 +299,7 @@ def create_nerf(args):
                     embed_ch_mid=embed_ch_mid,
                     n_layers_time=args.n_layers_time,
                     n_width_time=args.n_width_time,
-                    skips=[int(x) for x in args.skips_time.split(',')],
+                    skips_time=[int(x) for x in args.skips_time.split(',')],
                     ).to(device)
     # else:
     #     model = NeRF(D=args.n_layers, W=args.n_width,
@@ -323,7 +324,7 @@ def create_nerf(args):
                     embed_ch_mid=embed_ch_mid,
                     n_layers_time=args.n_layers_time,
                     n_width_time=args.n_width_time,
-                    skips=[int(x) for x in args.skips_time.split(',')],
+                    skips_time=[int(x) for x in args.skips_time.split(',')],
                     ).to(device)
         # else:
         #     model_fine = NeRF(D=args.n_layers_fine, W=args.n_width_fine,

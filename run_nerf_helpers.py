@@ -349,7 +349,7 @@ class DNeRFSmall(nn.Module):
                  n_layers_time=2,
                  n_width_time=64,
                  embed_ch_mid=None,
-                 skips=[4]
+                 skips_time=[4]
                  ):
         """
         Rough Pipeline:
@@ -378,8 +378,8 @@ class DNeRFSmall(nn.Module):
         # Timenet
         self.n_layers_time = n_layers_time
         self.n_width_time = n_width_time
-        assert n_layers_time not in skips, "Change skips or n_layers for TimeNet, n_layers_time shoud't be in skips!"
-        self.skips = skips
+        assert n_layers_time not in skips_time, "Change skips or n_layers for TimeNet, n_layers_time shoud't be in skips!"
+        self.skips_time = skips_time
         self.embed_mid_fn = embed_mid_fn 
         self.embed_ch_mid = embed_ch_mid
 
@@ -389,7 +389,7 @@ class DNeRFSmall(nn.Module):
         layers = [nn.Linear(self.input_ch+self.input_ch_times, self.n_width_time)]
         for i in range(self.n_layers_time - 1):
             in_channels = self.n_width_time
-            if i in self.skips:
+            if i in self.skips_time:
                 in_channels += self.input_ch
 
             layers += [nn.Linear(in_channels, self.n_width_time)]
@@ -402,7 +402,7 @@ class DNeRFSmall(nn.Module):
             h = layer(h)
             if i != len(self.timenet):
                 h = F.relu(h)
-            if i in self.skips:
+            if i in self.skips_time:
                 h = torch.cat([points, h], -1)
         return h
 
