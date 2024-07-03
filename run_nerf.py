@@ -582,7 +582,7 @@ def train():
     K = None
 
     if args.dataset_type == 'blender':
-        images, poses, render_poses, hwf, i_split, bounding_box, render_times, times = load_blender_data(args.datadir, args.half_res, args.testskip)
+        images, poses, render_poses, hwf, i_split, bounding_box, render_times, times = load_blender_data(args.datadir, args.half_res, args.testskip, args.rescale)
         args.bounding_box = bounding_box
         print('Loaded blender', images.shape, render_poses.shape, hwf, args.datadir)
         i_train, i_val, i_test = i_split
@@ -948,7 +948,7 @@ def train():
                 "time": time_list
             }
             log_path = os.path.join(basedir, expname, "loss_vs_time.pkl")
-            print(log_path)
+
             with open(log_path, "wb") as fp:
                 pickle.dump(loss_psnr_time, fp)
 

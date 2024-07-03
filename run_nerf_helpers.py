@@ -372,7 +372,7 @@ class DNeRFSmall(nn.Module):
                  geo_feat_dim=geo_feat_dim,
                  num_layers_color=num_layers_color,
                  hidden_dim_color=hidden_dim_color,
-                 input_ch=embed_ch_mid, 
+                 input_ch= embed_ch_mid, 
                  input_ch_views=input_ch_views)
         
         # Timenet
@@ -407,15 +407,13 @@ class DNeRFSmall(nn.Module):
         return h
 
     def forward(self, x):
-        # import pdb; pdb.set_trace()
         input_pts, input_views, input_times = torch.split(
             x, 
             [self.input_ch, self.input_ch_views, self.input_ch_times], 
             dim=-1)
-        
+
         dx = self.query_time(input_pts, input_times)
         input_pts_orig = input_pts[:, :3]
-    
         points = self.embed_mid_fn(dx + input_pts_orig)
         
         nerf_input = torch.cat([points, input_views], dim=-1)

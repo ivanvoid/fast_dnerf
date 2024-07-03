@@ -35,7 +35,10 @@ def pose_spherical(theta, phi, radius):
     return c2w
 
 
-def load_blender_data(basedir, half_res=False, testskip=1):
+def load_blender_data(basedir, half_res=False, testskip=1, rescale=None):
+    '''
+        rescale float: multiplicative rescale, <1 down; >1 up
+    '''
     splits = ['train', 'val', 'test']
     metas = {}
     for s in splits:
@@ -60,7 +63,8 @@ def load_blender_data(basedir, half_res=False, testskip=1):
             
         for frame in meta['frames'][::skip]:
             fname = os.path.join(basedir, frame['file_path'] + '.png')
-            imgs.append(imageio.imread(fname))
+            image = imageio.imread(fname)
+            imgs.append(image)
             poses.append(np.array(frame['transform_matrix']))
 
             # Time
@@ -104,7 +108,15 @@ def load_blender_data(basedir, half_res=False, testskip=1):
         for i, img in enumerate(imgs):
             imgs_half_res[i] = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA)
         imgs = imgs_half_res
-        # imgs = tf.image.resize_area(imgs, [400, 400]).numpy()
+    if rescale:
+        H = int(H * rescale)
+        W = int(W * rescale)
+        print('RESOLUTION [',H,', ',W,' ]')
+        focal = focal * rescale
+        imgs_half_res = np.zeros((imgs.shape[0], H, W, 4))
+        for i, img in enumerate(imgs):
+            imgs_half_res[i] = cv2.resize(img, (W, H), interpolation=cv2.INTER_AREA)
+        imgs = imgs_half_res
 
     bounding_box = get_bbox3d_for_blenderobj(metas["train"], H, W, near=2.0, far=6.0)
         

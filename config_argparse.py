@@ -117,6 +117,10 @@ def config_parser():
                         help='options: llff / blender / deepvoxels')
     parser.add_argument("--testskip", type=int, default=8,
                         help='will load 1/N images from test/val sets, useful for large datasets like deepvoxels')
+    parser.add_argument("--rescale", type=float, default=1.0,
+                    help='Rescale images by a given factor.')
+
+
 
     ## deepvoxels flags
     parser.add_argument("--shape", type=str, default='greek',
