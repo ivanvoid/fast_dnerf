@@ -948,6 +948,7 @@ def train():
                 "time": time_list
             }
             log_path = os.path.join(basedir, expname, "loss_vs_time.pkl")
+            print(log_path)
             with open(log_path, "wb") as fp:
                 pickle.dump(loss_psnr_time, fp)
 
